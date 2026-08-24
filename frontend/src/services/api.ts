@@ -140,13 +140,17 @@ export class ApiService {
     const data = await response.json();
     const anomalies = flattenAnomalies(data.anomalies || {});
     const riskLevel = data.summary?.overall_risk_level || 'LOW';
+    const affectedRows = new Set(anomalies.map((item) => item.row).filter((row) => row > 0)).size;
     return { analysis: { fileId, fileName: data.file_name || 'data.csv', totalRows: Number(data.row_count || 0),
       analyzedRows: Number(data.active_lines?.active_lines_count || 0), anomalies,
       riskScore: Number(data.summary?.overall_risk_score || 0), riskLevel: riskLevel === 'UNKNOWN' ? 'LOW' : riskLevel,
       detectedCountry: data.country?.country || 'Unknown', detectedSchema: data.schema?.is_orange_money ? 'orange_money' : 'other',
       analysisTime: 0, createdAt: new Date().toISOString() },
-      summary: { totalAnomalies: Number(data.summary?.total_anomalies || 0), criticalAnomalies: 0, warningAnomalies: 0,
-        infoAnomalies: 0, affectedRows: 0, complianceScore: Number(data.summary?.overall_compliance_rate || 0) } };
+      summary: { totalAnomalies: Number(data.summary?.total_anomalies || anomalies.length),
+        criticalAnomalies: anomalies.filter((item) => item.severity === 'error').length,
+        warningAnomalies: anomalies.filter((item) => item.severity === 'warning').length,
+        infoAnomalies: anomalies.filter((item) => item.severity === 'info').length,
+        affectedRows, complianceScore: Number(data.summary?.overall_compliance_rate || 0) } };
   }
 
   static async exportReportPdf(fileId: string): Promise<Blob> {
