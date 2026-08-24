@@ -70,11 +70,25 @@ export default function DashboardPage() {
     <Layout>
       <div className="max-w-6xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">Dashboard</h1>
-          <p className="text-lg text-gray-600">
-            Historique de vos analyses de fichiers
-          </p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-4xl font-bold text-gray-900 mb-2">Dashboard</h1>
+              <p className="text-lg text-gray-600">Historique de vos analyses de fichiers</p>
+            </div>
+            <Link href="/upload">
+              <Button className="bg-orange-500 hover:bg-orange-600 text-white">Nouvelle analyse</Button>
+            </Link>
+          </div>
         </div>
+
+        {analyses.length > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <Card><CardContent className="pt-5"><p className="text-sm text-gray-600">Analyses</p><p className="text-2xl font-bold">{total}</p></CardContent></Card>
+            <Card><CardContent className="pt-5"><p className="text-sm text-gray-600">Risque moyen</p><p className="text-2xl font-bold text-orange-600">{Math.round(analyses.reduce((sum, item) => sum + item.riskScore, 0) / analyses.length)}%</p></CardContent></Card>
+            <Card><CardContent className="pt-5"><p className="text-sm text-gray-600">Anomalies</p><p className="text-2xl font-bold text-red-600">{analyses.reduce((sum, item) => sum + item.anomalyCount, 0)}</p></CardContent></Card>
+            <Card><CardContent className="pt-5"><p className="text-sm text-gray-600">Terminées</p><p className="text-2xl font-bold text-green-600">{analyses.filter((item) => item.status === 'completed').length}</p></CardContent></Card>
+          </div>
+        )}
 
         {error && (
           <Card className="border-red-200 bg-red-50 mb-6">
@@ -109,7 +123,7 @@ export default function DashboardPage() {
             {analyses.map((analysis) => (
               <Card key={analysis.id} className="hover:shadow-lg transition-shadow">
                 <CardContent className="pt-6">
-                  <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-center">
+                  <div className="grid grid-cols-1 md:grid-cols-7 gap-4 items-center">
                     <div>
                       <p className="text-sm text-gray-600">Fichier</p>
                       <p className="font-semibold text-gray-900 truncate">
@@ -145,8 +159,12 @@ export default function DashboardPage() {
                     <div>
                       <p className="text-sm text-gray-600">Lignes</p>
                       <p className="text-lg font-semibold text-gray-900">
-                        {analysis.rowsAnalyzed}
+                        {analysis.rowsAnalyzed.toLocaleString()}
                       </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Anomalies</p>
+                      <p className="text-lg font-semibold text-gray-900">{analysis.anomalyCount.toLocaleString()}</p>
                     </div>
 
                     <div>
