@@ -44,7 +44,9 @@ class PrepAgent:
             if ext == ".xlsx":
                 engine_used = "pandas"
             else:
-                engine_used = "pandas" if size_mb <= self.PANDAS_THRESHOLD_MB else "duckdb"
+                # CSV/JSON/Parquet profiling stays in DuckDB so large files
+                # never cross the pandas in-memory boundary.
+                engine_used = "duckdb"
 
             # 3) Profiling
             if engine_used == "pandas":
