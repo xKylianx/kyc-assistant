@@ -516,6 +516,8 @@ def aggregate_analysis_results(analysis_result: Dict[str, Any]) -> Dict[str, Any
         "overall_risk_level": aggregated.get("overall_risk_level", "UNKNOWN"),
         "fields_analyzed": aggregated.get("fields_analyzed", {}),
         "total_anomalies": aggregated.get("total_anomalies", 0),
+        "anomalies_by_field": aggregated.get("anomalies_by_field", {}),
         "critical_fields": aggregated.get("critical_fields", []),
+        "detailed_results": aggregated.get("detailed_results", {}),
         "executive_summary": aggregated.get("executive_summary", {}),
     }
