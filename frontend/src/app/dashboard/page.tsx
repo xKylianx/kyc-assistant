@@ -3,10 +3,10 @@
 import { useEffect, useState } from 'react';
 import { Layout } from '@/src/components/common';
 import { ApiService } from '@/src/services/api';
-import { AnalysisResponse, AnalysisHistory } from '@/src/types/analysis';
+import { AnalysisResponse } from '@/src/types/analysis';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/card';
 import { Button } from '@/src/components/ui/button';
-import { Trash2, Eye, Download } from 'lucide-react';
+import { Trash2, Eye } from 'lucide-react';
 import Link from 'next/link';
 
 export default function DashboardPage() {
@@ -48,22 +48,6 @@ export default function DashboardPage() {
       setAnalyses(analyses.filter((a) => a.id !== analysisId));
     } catch (err) {
       alert('Erreur lors de la suppression');
-    }
-  };
-
-  const handleExport = async (analysisId: string, fileName: string) => {
-    try {
-      const blob = await ApiService.exportAnalysisPdf(analysisId);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${fileName}-report.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (err) {
-      alert('Erreur lors de l\'export');
     }
   };
 
@@ -174,23 +158,12 @@ export default function DashboardPage() {
                   </div>
 
                   <div className="mt-4 flex gap-2 justify-end">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex items-center gap-2"
-                    >
-                      <Eye className="w-4 h-4" />
-                      Détails
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex items-center gap-2"
-                      onClick={() => handleExport(analysis.id, analysis.fileName)}
-                    >
-                      <Download className="w-4 h-4" />
-                      Export
-                    </Button>
+                    <Link href={`/dashboard/${analysis.id}`}>
+                      <Button variant="outline" size="sm" className="flex items-center gap-2">
+                        <Eye className="w-4 h-4" />
+                        Détails
+                      </Button>
+                    </Link>
                     <Button
                       variant="outline"
                       size="sm"
