@@ -20,7 +20,7 @@ def upsert_analysis_results(
     city_analysis: Optional[Dict] = None,
     overall_risk_score: Optional[float] = None,
     overall_risk_level: Optional[str] = None,
-    anomalies: Optional[List[Dict]] = None,
+    anomalies: Optional[Any] = None,
     analysis_error: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
