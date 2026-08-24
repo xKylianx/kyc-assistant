@@ -617,6 +617,29 @@ def get_report(
     total_rows = active_lines.total_lines_count if active_lines else 0
     active_rows = active_lines.active_lines_count if active_lines else 0
 
+    completed_field_results = [
+        value for value in detailed_results.values()
+        if isinstance(value, dict) and value.get("status") == "completed"
+    ]
+    compliance_rates = [
+        float(value["compliance_rate"])
+        for value in completed_field_results
+        if value.get("compliance_rate") is not None
+    ]
+    overall_compliance_rate = (
+        round(sum(compliance_rates) / len(compliance_rates), 2)
+        if compliance_rates
+        else 0.0
+    )
+    total_anomalies = sum(
+        len(items) for items in (analysis.anomalies or {}).values()
+        if isinstance(items, list)
+    )
+    fields_analyzed = {
+        "completed": len(completed_field_results),
+        "total": len(detailed_results),
+    }
+
     return {
         "file_id": file_id,
         "file_name": uploaded_file.original_filename,
@@ -679,12 +702,12 @@ def get_report(
             ),
         },
         "summary": {
-            "overall_compliance_rate": 0.0,
+            "overall_compliance_rate": overall_compliance_rate,
             "overall_risk_score": analysis.overall_risk_score or 0.0,
             "overall_risk_level": analysis.overall_risk_level or "UNKNOWN",
-            "total_anomalies": 0,
+            "total_anomalies": total_anomalies,
             "active_rows_count": active_rows,
-            "fields_analyzed": {},
+            "fields_analyzed": fields_analyzed,
         },
         "detailed_results": detailed_results,
         "anomalies": analysis.anomalies or {},
