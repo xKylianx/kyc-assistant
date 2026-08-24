@@ -647,3 +647,86 @@ def get_report(
         "anomalies": analysis.anomalies or {},
         "executive_summary": executive_summary,
     }
+
+
+@router.get("/analyses")
+def list_analyses(
+    page: int = 1,
+    page_size: int = 10,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Return paginated analysis history for the dashboard."""
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+
+    query = (
+        db.query(UploadedFile, AnalysisResult, ActiveLinesDetection)
+        .join(AnalysisResult, AnalysisResult.file_id == UploadedFile.file_id)
+        .outerjoin(
+            ActiveLinesDetection,
+            ActiveLinesDetection.file_id == UploadedFile.file_id,
+        )
+        .filter(UploadedFile.deleted_at.is_(None))
+        .order_by(AnalysisResult.analyzed_at.desc())
+    )
+
+    total = query.count()
+    rows = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    analyses = []
+    for uploaded_file, analysis, active_lines in rows:
+        anomalies = analysis.anomalies or {}
+        anomaly_count = sum(
+            len(items) for items in anomalies.values()
+            if isinstance(items, list)
+        )
+        analyses.append({
+            "id": uploaded_file.file_id,
+            "fileId": uploaded_file.file_id,
+            "fileName": uploaded_file.original_filename,
+            "fileType": uploaded_file.extension.lstrip(".").lower(),
+            "fileSize": uploaded_file.size_bytes,
+            "riskScore": float(analysis.overall_risk_score or 0),
+            "riskLevel": (analysis.overall_risk_level or "UNKNOWN").upper(),
+            "rowsAnalyzed": int(
+                active_lines.active_lines_count
+                if active_lines
+                else 0
+            ),
+            "totalRows": int(
+                active_lines.total_lines_count
+                if active_lines
+                else 0
+            ),
+            "anomalyCount": anomaly_count,
+            "status": analysis.analysis_status,
+            "createdAt": analysis.analyzed_at.isoformat() if analysis.analyzed_at else uploaded_file.created_at.isoformat(),
+        })
+
+    return {
+        "status": "ok",
+        "analyses": analyses,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
+
+
+@router.delete("/analyses/{analysis_id}")
+def delete_analysis(
+    analysis_id: str,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Soft-delete an analysis from the dashboard history."""
+    uploaded_file = _get_file(db, analysis_id)
+    if uploaded_file.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    uploaded_file.deleted_at = datetime.utcnow()
+    uploaded_file.status = "archived"
+    db.commit()
+
+    return {
+        "status": "deleted",
+        "analysis_id": analysis_id,
+    }
