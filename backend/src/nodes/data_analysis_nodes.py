@@ -11,6 +11,95 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+ANALYSIS_CHUNK_SIZE = 50_000
+
+
+def _sql_ident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+class ChunkedColumn:
+    """
+    Lazy column reader backed by DuckDB.
+
+    Iteration fetches at most ANALYSIS_CHUNK_SIZE rows at a time. This keeps
+    large CSV analysis bounded in memory instead of calling fetchall().
+    """
+
+    def __init__(
+        self,
+        file_path: str,
+        column: str,
+        delimiter: str = ",",
+        active_status_column: str | None = None,
+        active_status_values: list | None = None,
+        drop_nulls: bool = False,
+        expected_length: int | None = None,
+        chunk_size: int = ANALYSIS_CHUNK_SIZE,
+    ):
+        self.file_path = file_path
+        self.column = column
+        self.delimiter = delimiter or ","
+        self.active_status_column = active_status_column
+        self.active_status_values = active_status_values or []
+        self.drop_nulls = drop_nulls
+        self.expected_length = expected_length
+        self.chunk_size = chunk_size
+
+    def _where_clause(self) -> str:
+        if not self.active_status_column or not self.active_status_values:
+            return ""
+        values = ", ".join(_sql_literal(v) for v in self.active_status_values)
+        return f" WHERE {_sql_ident(self.active_status_column)} IN ({values})"
+
+    def _relation(self) -> str:
+        path = str(self.file_path).replace("'", "''")
+        delim = str(self.delimiter).replace("'", "''")
+        return f"read_csv_auto({_sql_literal(path)}, delim={_sql_literal(delim)})"
+
+    def __iter__(self):
+        con = duckdb.connect(database=":memory:")
+        try:
+            query = (
+                f"SELECT CAST({_sql_ident(self.column)} AS VARCHAR) "
+                f"FROM {self._relation()}{self._where_clause()}"
+            )
+            cursor = con.execute(query)
+            while True:
+                rows = cursor.fetchmany(self.chunk_size)
+                if not rows:
+                    break
+                for (value,) in rows:
+                    if self.drop_nulls and (value is None or str(value).strip() == ""):
+                        continue
+                    yield "" if value is None else str(value).strip()
+        finally:
+            con.close()
+
+    def __len__(self) -> int:
+        if self.expected_length is not None and not self.drop_nulls:
+            return self.expected_length
+
+        con = duckdb.connect(database=":memory:")
+        try:
+            null_filter = (
+                f" AND {_sql_ident(self.column)} IS NOT NULL "
+                f"AND TRIM(CAST({_sql_ident(self.column)} AS VARCHAR)) <> ''"
+                if self.drop_nulls
+                else ""
+            )
+            return int(con.execute(
+                f"SELECT COUNT(*) FROM {self._relation()}"
+                f"{self._where_clause()}{' WHERE ' if self._where_clause() else ' AND '}{'1=1' if not null_filter else '1=1'}{null_filter}"
+            ).fetchone()[0])
+        finally:
+            con.close()
+
+
 
 # Initialize the LLM (adjust based on your setup)
 model = ChatOpenAI(
@@ -109,10 +198,13 @@ def analyze_msisdn(state: AnalysisAgentState) -> AnalysisAgentState:
             ]
         else:
             # Lire depuis fichier
-            result = con.execute(
-                f'SELECT CAST("{msisdn_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            msisdn_values = [str(row[0]).strip() for row in result if row[0]]
+            msisdn_values = ChunkedColumn(
+                file_path, msisdn_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                drop_nulls=True,
+            )
         
         # Compter les valeurs null/vides
         null_count = active_rows_count - len(msisdn_values)
@@ -381,10 +473,13 @@ def analyze_first_name(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{first_name_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            first_names = [str(row[0]).strip() if row[0] else "" for row in result]
+            first_names = ChunkedColumn(
+                file_path, first_name_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -651,10 +746,13 @@ def analyze_last_name(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{last_name_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            last_names = [str(row[0]).strip() if row[0] else "" for row in result]
+            last_names = ChunkedColumn(
+                file_path, last_name_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -925,10 +1023,13 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{id_type_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            id_types = [str(row[0]).strip().upper() if row[0] else "" for row in result]
+            id_types = ChunkedColumn(
+                file_path, id_type_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -1241,10 +1342,13 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{id_number_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            id_numbers = [str(row[0]).strip() if row[0] else "" for row in result]
+            id_numbers = ChunkedColumn(
+                file_path, id_number_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -1672,10 +1776,13 @@ def analyze_dob(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{dob_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            dob_values = [str(row[0]).strip() if row[0] else "" for row in result]
+            dob_values = ChunkedColumn(
+                file_path, dob_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -2052,10 +2159,13 @@ def analyze_city(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{city_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            city_values = [str(row[0]).strip() if row[0] else "" for row in result]
+            city_values = ChunkedColumn(
+                file_path, city_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -2392,10 +2502,13 @@ def analyze_address(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{address_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            address_values = [str(row[0]).strip() if row[0] else "" for row in result]
+            address_values = ChunkedColumn(
+                file_path, address_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
