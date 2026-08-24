@@ -38,12 +38,12 @@ async def upload_file(
     resolved_thread_id = thread_id or str(uuid.uuid4())
 
     try:
-        content = await file.read()
-
-        saved = storage_service.save_file(
+        # Stream UploadFile directly to disk. Do not call file.read():
+        # that would materialize a potentially 1 GB upload in RAM.
+        saved = storage_service.save_upload_stream(
             db=db,
             original_filename=file.filename,
-            content=content,
+            stream=file.file,
             user_id=user_id,
             thread_id=resolved_thread_id,
         )
