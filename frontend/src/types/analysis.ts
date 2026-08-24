@@ -1,4 +1,24 @@
-// Types pour l'upload et l'analyse
+export interface PrepDatasetProfile {
+  row_count: number;
+  column_count: number;
+  columns: string[];
+  dtypes: Record<string, string>;
+  missing_ratio_by_column: Record<string, number>;
+  sample_rows: Record<string, unknown>[];
+}
+
+export interface PrepState {
+  thread_id?: string | null;
+  user_id?: string | null;
+  file_id: string;
+  file_name: string;
+  file_path: string;
+  prep_status: 'uploaded' | 'success' | 'error';
+  prep_error?: string | null;
+  dataset_profile?: PrepDatasetProfile;
+  prep_meta?: Record<string, unknown>;
+  prepared_at?: string;
+}
 
 export interface FileInfo {
   fileName: string;
