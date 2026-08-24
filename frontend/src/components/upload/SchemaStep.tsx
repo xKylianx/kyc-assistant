@@ -25,10 +25,11 @@ export function SchemaStep({ schema, onConfirm, isLoading }: SchemaStepProps) {
   };
 
   const handleConfirm = () => {
-    const filteredColumns = Object.fromEntries(
-      Object.entries(selectedColumns).filter(([, value]) => value && value.trim() !== '')
-    );
-    onConfirm(filteredColumns);
+    const missing = requiredFields.filter(({ key }) => !selectedColumns[key]?.trim());
+    if (missing.length > 0) {
+      return;
+    }
+    onConfirm(selectedColumns);
   };
 
   const requiredFields = [
@@ -179,7 +180,7 @@ export function SchemaStep({ schema, onConfirm, isLoading }: SchemaStepProps) {
         </Button>
         <Button
           onClick={handleConfirm}
-          disabled={isLoading}
+          disabled={isLoading || requiredFields.some(({ key }) => !selectedColumns[key]?.trim())}
           className="bg-orange-500 hover:bg-orange-600 text-white"
         >
           {isLoading ? 'Chargement...' : 'Continuer vers l\'analyse'}
