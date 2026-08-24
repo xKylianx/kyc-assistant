@@ -113,7 +113,7 @@ export function useKYCAnalysis() {
     setError(null);
     try {
       const result = await ApiService.detectCountry(fileId);
-      return normalized;
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erreur lors de la détection du pays';
       setError(message);
@@ -168,7 +168,7 @@ export function useKYCAnalysis() {
       };
       setAnalysisResult(normalized);
       setCurrentStep('analysis');
-      return result;
+      return normalized;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erreur lors de l’analyse KYC';
       setError(message);
