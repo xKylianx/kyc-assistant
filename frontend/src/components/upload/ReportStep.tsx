@@ -1,8 +1,10 @@
 'use client';
 
 import { AnalysisReport } from '@/src/types/analysis';
+import { ApiService } from '@/src/services/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/card';
 import { Button } from '@/src/components/ui/button';
+import { useState } from 'react';
 import { CheckCircle, AlertCircle, Download, RotateCcw } from 'lucide-react';
 
 interface ReportStepProps {
@@ -28,9 +30,25 @@ export function ReportStep({ report, onReset }: ReportStepProps) {
     }
   };
 
-  const handleExportPdf = () => {
-    // À implémenter avec le backend
-    alert('Export PDF - À implémenter');
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportPdf = async () => {
+    setIsExporting(true);
+    try {
+      const blob = await ApiService.exportReportPdf(analysis.fileId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = analysis.fileName.replace(/\.[^.]+$/, '') + '-kyc-report.pdf';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Erreur export PDF:', error);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -189,10 +207,11 @@ export function ReportStep({ report, onReset }: ReportStepProps) {
         </Button>
         <Button
           onClick={handleExportPdf}
+          disabled={isExporting}
           className="bg-orange-500 hover:bg-orange-600 text-white flex items-center gap-2"
         >
           <Download className="w-4 h-4" />
-          Télécharger le rapport PDF
+          {isExporting ? 'Export en cours...' : 'Télécharger le rapport PDF'}
         </Button>
       </div>
     </div>
