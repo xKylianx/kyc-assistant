@@ -1,4 +1,4 @@
-import { FileInfo, SchemaDetection, KYCAnalysisResult, AnalysisReport, PrepState } from '../types/analysis';
+import { FileInfo, SchemaDetection, KYCAnalysisResult, AnalysisReport, PrepState, AnalysisResponse } from '../types/analysis';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
