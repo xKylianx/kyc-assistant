@@ -113,7 +113,7 @@ export function useKYCAnalysis() {
     setError(null);
     try {
       const result = await ApiService.detectCountry(fileId);
-      return result;
+      return normalized;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erreur lors de la détection du pays';
       setError(message);
@@ -160,7 +160,13 @@ export function useKYCAnalysis() {
     setError(null);
     try {
       const result = await ApiService.analyzeKYC(fileId);
-      setAnalysisResult(result);
+      const normalized = {
+        ...result,
+        totalRows: result.totalRows || fileInfo?.rowCount || 0,
+        detectedCountry: schemaDetection?.detectedCountry || result.detectedCountry,
+        detectedSchema: schemaDetection?.detectedSchema || result.detectedSchema,
+      };
+      setAnalysisResult(normalized);
       setCurrentStep('analysis');
       return result;
     } catch (err) {
