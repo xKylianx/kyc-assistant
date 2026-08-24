@@ -38,6 +38,7 @@ class ChunkedColumn:
         active_status_column: str | None = None,
         active_status_values: list | None = None,
         drop_nulls: bool = False,
+        uppercase: bool = False,
         expected_length: int | None = None,
         chunk_size: int = ANALYSIS_CHUNK_SIZE,
     ):
@@ -76,7 +77,8 @@ class ChunkedColumn:
                 for (value,) in rows:
                     if self.drop_nulls and (value is None or str(value).strip() == ""):
                         continue
-                    yield "" if value is None else str(value).strip()
+                    normalized = "" if value is None else str(value).strip()
+                    yield normalized.upper() if self.uppercase else normalized
         finally:
             con.close()
 
@@ -1028,6 +1030,7 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
                 delimiter=state.get("detected_delimiter") or ",",
                 active_status_column=state.get("active_status_column"),
                 active_status_values=state.get("active_status_values"),
+                uppercase=True,
                 expected_length=active_rows_count,
             )
             con.close()
