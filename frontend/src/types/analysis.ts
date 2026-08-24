@@ -85,3 +85,26 @@ export interface AnalysisReport {
     complianceScore: number;
   };
 }
+
+
+export interface AnalysisResponse {
+  id: string;
+  fileId: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  riskScore: number;
+  riskLevel: string;
+  rowsAnalyzed: number;
+  totalRows: number;
+  anomalyCount: number;
+  status: 'completed' | 'error' | 'in_progress' | string;
+  createdAt: string;
+}
+
+export type AnalysisHistory = {
+  analyses: AnalysisResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
