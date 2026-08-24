@@ -1,0 +1,9 @@
+backend/data/uploads/
+venv
+backend/data/uploads/
+
+.env
+
+.env.*
+!.env.example
+.env
