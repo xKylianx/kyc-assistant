@@ -153,6 +153,50 @@ export class ApiService {
         affectedRows, complianceScore: Number(data.summary?.overall_compliance_rate || 0) } };
   }
 
+  static async getAnalysisHistory(page = 1, pageSize = 10): Promise<{ analyses: AnalysisResponse[]; total: number; page: number; pageSize: number }> {
+    if (USE_MOCK) {
+      return {
+        analyses: Array.from({ length: Math.min(pageSize, 3) }, (_, index) => ({
+          id: 'mock-analysis-' + index,
+          fileId: 'mock-file-' + index,
+          fileName: ['clients.csv', 'kyc_export.xlsx', 'orange_money.csv'][index],
+          fileType: index === 1 ? 'xlsx' : 'csv',
+          fileSize: 1024 * 1024,
+          riskScore: [18, 47, 72][index],
+          riskLevel: ['LOW', 'MEDIUM', 'HIGH'][index],
+          rowsAnalyzed: [1200, 8450, 320][index],
+          totalRows: [1500, 9000, 500][index],
+          anomalyCount: [4, 82, 31][index],
+          status: 'completed',
+          createdAt: new Date(Date.now() - index * 86400000).toISOString(),
+        })),
+        total: 3,
+        page,
+        pageSize,
+      };
+    }
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    const response = await fetch(API_BASE_URL + '/orchestrator/analyses?' + params.toString());
+    if (!response.ok) throw await parseError(response, "Erreur lors du chargement de l'historique");
+    const data = await response.json();
+    return {
+      analyses: (data.analyses || []) as AnalysisResponse[],
+      total: Number(data.total || 0),
+      page: Number(data.page || page),
+      pageSize: Number(data.page_size || pageSize),
+    };
+  }
+
+  static async deleteAnalysis(analysisId: string): Promise<void> {
+    if (USE_MOCK) return;
+    const response = await fetch(API_BASE_URL + '/orchestrator/analyses/' + encodeURIComponent(analysisId), { method: 'DELETE' });
+    if (!response.ok) throw await parseError(response, 'Erreur lors de la suppression');
+  }
+
+  static async exportAnalysisPdf(analysisId: string): Promise<Blob> {
+    return this.exportReportPdf(analysisId);
+  }
+
   static async exportReportPdf(fileId: string): Promise<Blob> {
     if (USE_MOCK) return new Blob(['Mock PDF Report'], { type: 'application/pdf' });
     const response = await fetch(API_BASE_URL + '/orchestrator/report/' + encodeURIComponent(fileId) + '/export/pdf');
