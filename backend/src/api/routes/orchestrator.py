@@ -373,97 +373,42 @@ def analyze(
     file_id: str,
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    """
-    Run the KYC analysis once schema, country and active lines are ready.
-
-    This is intentionally the only /analyze route.
-    """
-    from src.agents.analysis_agent import (
-        aggregate_analysis_results,
-        run_analysis_agent,
-    )
+    """Run KYC analysis while keeping the dataset out of RAM."""
+    from src.agents.analysis_agent import aggregate_analysis_results, run_analysis_agent
     from src.repositories.analysis_result_repo import upsert_analysis_results
-    import pandas as pd
 
     uploaded_file = _get_file(db, file_id)
 
     schema_mapping = (
-        db.query(SchemaMapping)
-        .filter(SchemaMapping.file_id == file_id)
-        .first()
+        db.query(SchemaMapping).filter(SchemaMapping.file_id == file_id).first()
     )
     if not schema_mapping or schema_mapping.mapping_status != "validated":
-        raise HTTPException(
-            status_code=400,
-            detail="Schema must be validated before analysis",
-        )
+        raise HTTPException(status_code=400, detail="Schema must be validated before analysis")
 
     country_detection = (
-        db.query(CountryDetection)
-        .filter(CountryDetection.file_id == file_id)
-        .first()
+        db.query(CountryDetection).filter(CountryDetection.file_id == file_id).first()
     )
-    if (
-        not country_detection
-        or country_detection.country_detection_status != "validated"
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Country must be validated before analysis",
-        )
+    if not country_detection or country_detection.country_detection_status != "validated":
+        raise HTTPException(status_code=400, detail="Country must be validated before analysis")
 
     active_lines = (
         db.query(ActiveLinesDetection)
         .filter(ActiveLinesDetection.file_id == file_id)
         .first()
     )
-    if (
-        not active_lines
-        or active_lines.detection_status not in {"completed", "validated"}
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Active lines must be detected before analysis",
-        )
-
-    try:
-        delimiter = uploaded_file.detected_delimiter or ","
-        df = pd.read_csv(
-            uploaded_file.file_path,
-            sep=delimiter,
-            engine="python",
-            on_bad_lines="skip",
-            encoding="utf-8",
-            encoding_errors="ignore",
-        )
-
-        if active_lines.active_status_column and active_lines.active_status_values:
-            status_col = active_lines.active_status_column
-            if status_col not in df.columns:
-                raise ValueError(
-                    f"Active status column '{status_col}' not found in dataset"
-                )
-            df = df[df[status_col].isin(active_lines.active_status_values)]
-
-        data = (
-            df.where(pd.notna(df), None)
-            .to_dict(orient="records")
-        )
-        active_rows_count = len(data)
-
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Error reading file: {exc}",
-        ) from exc
+    if not active_lines or active_lines.detection_status not in {"completed", "validated"}:
+        raise HTTPException(status_code=400, detail="Active lines must be detected before analysis")
 
     initial_state = {
         "file_id": file_id,
         "thread_id": uploaded_file.thread_id or file_id,
-        "data": data,
+        "data": [],
         "file_path": uploaded_file.file_path,
+        "detected_delimiter": uploaded_file.detected_delimiter or ",",
         "country": country_detection.detected_country,
-        "active_rows_count": active_rows_count,
+        "active_rows_count": int(active_lines.active_lines_count or 0),
+        "active_status_column": active_lines.active_status_column,
+        "active_status_values": active_lines.active_status_values or [],
         "schema_mapping": {
             "nom_column": schema_mapping.nom_column,
             "prenom_column": schema_mapping.prenom_column,
@@ -486,9 +431,7 @@ def analyze(
         aggregated = aggregate_analysis_results(analysis_result)
 
         if aggregated.get("status") == "error":
-            raise RuntimeError(
-                aggregated.get("error", "Analysis agent failed")
-            )
+            raise RuntimeError(aggregated.get("error", "Analysis agent failed"))
 
         upsert_analysis_results(
             db=db,
@@ -503,11 +446,7 @@ def analyze(
             address_analysis=analysis_result.get("address_analysis"),
             city_analysis=analysis_result.get("city_analysis"),
             overall_risk_score=aggregated.get("overall_risk_score", 0),
-            overall_risk_level=aggregated.get(
-                "overall_risk_level",
-                "UNKNOWN",
-            ),
-            # Keep the complete anomaly-by-field structure for reporting.
+            overall_risk_level=aggregated.get("overall_risk_level", "UNKNOWN"),
             anomalies=aggregated.get("anomalies_by_field", {}),
         )
         db.commit()
@@ -528,8 +467,6 @@ def analyze(
             },
         }
 
-    except HTTPException:
-        raise
     except Exception as exc:
         db.rollback()
         upsert_analysis_results(
@@ -539,10 +476,7 @@ def analyze(
             analysis_error=str(exc),
         )
         db.commit()
-        raise HTTPException(
-            status_code=500,
-            detail=f"KYC analysis failed: {exc}",
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"KYC analysis failed: {exc}") from exc
 
 
 @router.get("/report/{file_id}", response_model=ReportResponse)
