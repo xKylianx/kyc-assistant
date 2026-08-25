@@ -496,28 +496,17 @@ def _aggregate_results(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-
 def aggregate_analysis_results(analysis_result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Extrait les résultats agrégés du state final.
-    
-    Args:
-        analysis_result: État final après exécution du graph
-        
-    Returns:
-        Résultats agrégés
-    """
-    
     aggregated = analysis_result.get("aggregated_results", {})
-    
+
     return {
         "overall_compliance_rate": aggregated.get("overall_compliance_rate", 0),
         "overall_risk_score": aggregated.get("overall_risk_score", 0),
         "overall_risk_level": aggregated.get("overall_risk_level", "UNKNOWN"),
+        "active_rows_count": aggregated.get("active_rows_count", 0),
         "fields_analyzed": aggregated.get("fields_analyzed", {}),
         "total_anomalies": aggregated.get("total_anomalies", 0),
-        "anomalies_by_field": aggregated.get("anomalies_by_field", {}),
+        "anomalies_by_field": aggregated.get("anomalies_by_field", {}),  # AJOUTÉ
         "critical_fields": aggregated.get("critical_fields", []),
-        "detailed_results": aggregated.get("detailed_results", {}),
         "executive_summary": aggregated.get("executive_summary", {}),
     }

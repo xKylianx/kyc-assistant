@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
+from src.services import report_service
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_db
@@ -19,6 +21,7 @@ from src.db.models.schema_mapping import SchemaMapping
 from src.db.models.country_detection import CountryDetection
 from src.db.models.active_lines_detection import ActiveLinesDetection
 from src.db.models.analysis_result import AnalysisResult
+from src.repositories.analysis_result_repo import upsert_analysis_results, list_analysis_results
 
 router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 
@@ -373,7 +376,15 @@ def analyze(
     file_id: str,
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Run KYC analysis while keeping the dataset out of RAM."""
+    """
+    Lance l'analyse KYC complète sur un fichier.
+    
+    Prérequis:
+    - Fichier uploadé (/orchestrator/prep)
+    - Schéma validé (/orchestrator/validate-schema)
+    - Pays validé (/orchestrator/validate-country)
+    """
+        
     from src.agents.analysis_agent import aggregate_analysis_results, run_analysis_agent
     from src.repositories.analysis_result_repo import upsert_analysis_results
 
@@ -445,9 +456,13 @@ def analyze(
             dob_analysis=analysis_result.get("dob_analysis"),
             address_analysis=analysis_result.get("address_analysis"),
             city_analysis=analysis_result.get("city_analysis"),
-            overall_risk_score=aggregated.get("overall_risk_score", 0),
-            overall_risk_level=aggregated.get("overall_risk_level", "UNKNOWN"),
-            anomalies=aggregated.get("anomalies_by_field", {}),
+            overall_risk_score=aggregated["overall_risk_score"],
+            overall_risk_level=aggregated["overall_risk_level"],
+            overall_compliance_rate=aggregated.get("overall_compliance_rate"),
+            active_rows_count=aggregated.get("active_rows_count", active_rows_count),
+            anomalies=aggregated.get("critical_fields", []),
+            anomalies_by_field=aggregated.get("anomalies_by_field", {}),
+            executive_summary=aggregated.get("executive_summary", {}),
         )
         db.commit()
 
@@ -730,3 +745,52 @@ def delete_analysis(
         "status": "deleted",
         "analysis_id": analysis_id,
     }
+
+@router.get("/report/{file_id}")
+def get_report(file_id: str, db: Session = Depends(get_db)):
+    """
+    Construit le rapport final KYC (agrège AnalysisResult + métadonnées fichier/pays).
+    """
+    return report_service.build_report(db, file_id)
+
+
+@router.get("/report/{file_id}/export/pdf")
+def export_report_pdf(file_id: str, db: Session = Depends(get_db)):
+    """
+    Exporte le rapport KYC en PDF.
+    """
+    report = report_service.build_report(db, file_id)
+    pdf_bytes = report_service.render_report_pdf(report)
+    filename = f"kyc-report-{file_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@router.get("/analyses")
+def list_analyses(
+    page: int = 1,
+    page_size: int = 10,
+    country: Optional[str] = None,
+    sort: str = "desc",
+    db: Session = Depends(get_db),
+):
+    """
+    Historique paginé des analyses KYC complétées.
+
+    - `country` : filtre sur le pays détecté (ex. "FR", "Madagascar") pour
+      comparer l'évolution du niveau de conformité d'un pays donné dans le temps.
+    - `sort` : "asc" pour une vue chronologique (tendance), "desc" (défaut)
+      pour les analyses les plus récentes en premier.
+    """
+    if sort not in ("asc", "desc"):
+        raise HTTPException(status_code=400, detail="sort doit être 'asc' ou 'desc'")
+
+    return list_analysis_results(
+        db=db,
+        page=page,
+        page_size=page_size,
+        country=country,
+        sort=sort,
+    )
