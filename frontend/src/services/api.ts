@@ -1,224 +1,532 @@
-import { FileInfo, SchemaDetection, KYCAnalysisResult, AnalysisReport, PrepState, AnalysisResponse } from '../types/analysis';
+import {
+  UploadResult,
+  PrepState,
+  PrepResult,
+  SchemaDetection,
+  CountryDetection,
+  ActiveLinesDetection,
+  KYCAnalysisResult,
+  AnalysisReport,
+  AnalysisHistory,
+  KYCColumnMapping,
+} from '../types/analysis';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 
-async function parseError(response: Response, fallback: string): Promise<Error> {
-  const text = await response.text();
-  try {
-    const body = JSON.parse(text);
-    return new Error(body?.error?.message || body?.detail || fallback);
-  } catch {
-    return new Error(text || fallback);
+async function handleResponse<T>(response: Response, context: string): Promise<T> {
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = `Erreur lors de ${context}`;
+    try {
+      const parsed = JSON.parse(errorText);
+      message = parsed.error?.message || parsed.detail || message;
+    } catch {
+      // corps non-JSON, on garde le message par défaut
+    }
+    throw new Error(message);
   }
+  return response.json();
 }
 
 export class ApiService {
-  static async uploadFile(file: File): Promise<FileInfo & { fileId: string; prepState: PrepState }> {
+  /**
+   * Étape 1 : Uploader le fichier
+   * POST /files/upload
+   */
+  static async uploadFile(file: File): Promise<UploadResult> {
     if (USE_MOCK) {
-      const prepState: PrepState = {
-        thread_id: 'mock-thread', user_id: null, file_id: 'mock-file-id-123',
-        file_name: file.name, file_path: '/mock/' + file.name, prep_status: 'uploaded', prep_error: null,
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const fileId = 'mock-file-id-123';
+      return {
+        fileId,
+        fileName: file.name,
+        storedFileName: file.name,
+        filePath: `/mock/${file.name}`,
+        sizeBytes: file.size,
+        extension: file.name.split('.').pop() || 'csv',
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        prepState: {
+          thread_id: 'mock-thread',
+          user_id: 'mock-user',
+          file_id: fileId,
+          file_name: file.name,
+          file_path: `/mock/${file.name}`,
+          prep_status: 'uploaded',
+          prep_error: null,
+        },
       };
-      return { fileId: prepState.file_id, fileName: file.name, fileSize: file.size,
-        fileType: (file.name.split('.').pop() || 'csv') as 'csv' | 'xlsx' | 'xls',
-        delimiter: ',', rowCount: 0, preview: [], prepState };
     }
+
     const formData = new FormData();
     formData.append('file', file);
-    const response = await fetch(API_BASE_URL + '/files/upload', { method: 'POST', body: formData });
-    if (!response.ok) throw await parseError(response, "Erreur lors de l'upload");
-    const data = await response.json();
-    const saved = data.file;
-    const prepState = data.prep_state as PrepState;
-    return { fileId: saved.file_id, fileName: saved.file_name, fileSize: saved.size_bytes,
-      fileType: saved.extension.replace('.', '') as 'csv' | 'xlsx' | 'xls',
-      delimiter: saved.detected_delimiter || undefined, rowCount: 0, preview: [], prepState };
+
+    const response = await fetch(`${API_BASE_URL}/files/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const data = await handleResponse<{
+      status: string;
+      file: {
+        file_id: string;
+        file_name: string;
+        stored_file_name: string;
+        file_path: string;
+        size_bytes: number;
+        extension: string;
+        status: string;
+        created_at: string;
+      };
+      prep_state: PrepState;
+    }>(response, "l'upload du fichier");
+
+    return {
+      fileId: data.file.file_id,
+      fileName: data.file.file_name,
+      storedFileName: data.file.stored_file_name,
+      filePath: data.file.file_path,
+      sizeBytes: data.file.size_bytes,
+      extension: data.file.extension.replace('.', ''),
+      status: data.file.status,
+      createdAt: data.file.created_at,
+      prepState: data.prep_state,
+    };
   }
 
-  static async runPrep(prepState: PrepState): Promise<PrepState> {
+  /**
+   * Étape 2 : Lancer le prep agent (profiling du fichier)
+   * POST /orchestrator/prep
+   */
+  static async runPrep(prepState: PrepState): Promise<PrepResult> {
     if (USE_MOCK) {
-      return { ...prepState, prep_status: 'success',
-        dataset_profile: { row_count: 1250, column_count: 9,
-          columns: ['Nom', 'Prénom', 'MSISDN', 'ID Type', 'ID Number', 'DOB', 'Address', 'City', 'Status'],
-          dtypes: {}, missing_ratio_by_column: {},
-          sample_rows: [
-            { Nom: 'Doe', Prénom: 'John', MSISDN: '+33612345678', 'ID Type': 'Passport', 'ID Number': 'AB123456', DOB: '1990-05-15', Address: '123 Rue de Paris', City: 'Paris', Status: 'Active' },
-            { Nom: 'Smith', Prénom: 'Jane', MSISDN: '+33687654321', 'ID Type': 'ID Card', 'ID Number': 'CD789012', DOB: '1985-08-22', Address: '456 Avenue Lyon', City: 'Lyon', Status: 'Active' },
-          ] } };
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      return {
+        fileId: prepState.file_id,
+        prepStatus: 'success',
+        prepError: null,
+        prepMeta: { engineUsed: 'pandas', fileSizeMb: 0.02, csvDelimiterUsed: ',' },
+      };
     }
-    const response = await fetch(API_BASE_URL + '/orchestrator/prep', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+
+    const response = await fetch(`${API_BASE_URL}/orchestrator/prep`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prep_state: prepState }),
     });
-    if (!response.ok) throw await parseError(response, 'Erreur lors de la préparation du fichier');
-    const data = await response.json();
-    return data.data.prep_state as PrepState;
+
+    const data = await handleResponse<{
+      data: { prep_state: Record<string, any> };
+    }>(response, 'la préparation du fichier');
+
+    const ps = data.data.prep_state;
+    return {
+      fileId: ps.file_id,
+      prepStatus: ps.prep_status,
+      prepError: ps.prep_error,
+      datasetProfile: ps.dataset_profile
+        ? {
+            rowCount: ps.dataset_profile.row_count,
+            columnCount: ps.dataset_profile.column_count,
+            columns: ps.dataset_profile.columns,
+            dtypes: ps.dataset_profile.dtypes,
+            missingRatioByColumn: ps.dataset_profile.missing_ratio_by_column,
+            sampleRows: ps.dataset_profile.sample_rows,
+          }
+        : undefined,
+      prepMeta: ps.prep_meta
+        ? {
+            engineUsed: ps.prep_meta.engine_used,
+            fileSizeMb: ps.prep_meta.file_size_mb,
+            csvDelimiterUsed: ps.prep_meta.csv_delimiter_used,
+          }
+        : undefined,
+    };
   }
 
+  /**
+   * Étape 3 : Détecter le schéma (Orange Money ou mapping manuel)
+   * POST /orchestrator/schema-detect?file_id=...
+   */
   static async detectSchema(fileId: string): Promise<SchemaDetection> {
     if (USE_MOCK) {
-      const columns = ['Nom', 'Prénom', 'MSISDN', 'ID Type', 'ID Number', 'DOB', 'Address', 'City', 'Status'];
-      return { fileId, fileInfo: { fileName: 'data.csv', fileSize: 1024000, fileType: 'csv', delimiter: ',', rowCount: 1250, preview: [] },
-        detectedCountry: 'Unknown', detectedSchema: 'orange_money', availableColumns: columns,
-        selectedColumns: { nomColumn: 'Nom', prenomColumn: 'Prénom', msisdnColumn: 'MSISDN', idTypeColumn: 'ID Type', idNumberColumn: 'ID Number', dobColumn: 'DOB', addressColumn: 'Address', cityColumn: 'City', statusColumn: 'Status' } };
-    }
-    const response = await fetch(API_BASE_URL + '/orchestrator/schema-detect?file_id=' + encodeURIComponent(fileId), { method: 'POST' });
-    if (!response.ok) throw await parseError(response, 'Erreur lors de la détection du schéma');
-    const data = await response.json();
-    return { fileId,
-      fileInfo: { fileName: data.file_name || 'data.csv', fileSize: data.file_size_bytes || 0,
-        fileType: (data.extension || 'csv').replace('.', '') as 'csv' | 'xlsx' | 'xls',
-        delimiter: data.detected_delimiter || ',', rowCount: data.row_count || 0, preview: [] },
-      detectedCountry: data.detected_country || 'Unknown',
-      detectedSchema: data.is_orange_money ? 'orange_money' : 'other',
-      availableColumns: data.all_detected_columns || [],
-      selectedColumns: { nomColumn: data.nom_column, prenomColumn: data.prenom_column, msisdnColumn: data.msisdn_column,
-        idTypeColumn: data.id_type_column, idNumberColumn: data.id_number_column, dobColumn: data.dob_column,
-        addressColumn: data.address_column, cityColumn: data.city_column, statusColumn: data.status_column } };
-  }
-
-  static async validateSchema(fileId: string, selectedColumns: Record<string, string>): Promise<void> {
-    const params = new URLSearchParams({ file_id: fileId });
-    const mapping: Record<string, string | undefined> = {
-      nom_column: selectedColumns.nomColumn, prenom_column: selectedColumns.prenomColumn, msisdn_column: selectedColumns.msisdnColumn,
-      dob_column: selectedColumns.dobColumn, id_type_column: selectedColumns.idTypeColumn, id_number_column: selectedColumns.idNumberColumn,
-      status_column: selectedColumns.statusColumn, address_column: selectedColumns.addressColumn, city_column: selectedColumns.cityColumn,
-    };
-    Object.entries(mapping).forEach(([key, value]) => params.set(key, value || ''));
-    if (USE_MOCK) return;
-    const response = await fetch(API_BASE_URL + '/orchestrator/validate-schema?' + params.toString(), { method: 'POST' });
-    if (!response.ok) throw await parseError(response, 'Erreur lors de la validation du schéma');
-  }
-
-  static async detectCountry(fileId: string): Promise<{ country: string; confidence?: number }> {
-    if (USE_MOCK) return { country: 'FR', confidence: 0.99 };
-    const response = await fetch(API_BASE_URL + '/orchestrator/country-detect?file_id=' + encodeURIComponent(fileId), { method: 'POST' });
-    if (!response.ok) throw await parseError(response, 'Erreur lors de la détection du pays');
-    const data = await response.json();
-    return { country: data.detected_country || 'Unknown', confidence: data.country_detection_confidence };
-  }
-
-  static async validateCountry(fileId: string, country: string): Promise<void> {
-    if (USE_MOCK) return;
-    const params = new URLSearchParams({ file_id: fileId, country });
-    const response = await fetch(API_BASE_URL + '/orchestrator/validate-country?' + params.toString(), { method: 'POST' });
-    if (!response.ok) throw await parseError(response, 'Erreur lors de la validation du pays');
-  }
-
-  static async detectActiveLines(fileId: string) {
-    if (USE_MOCK) return { totalLines: 1250, activeLines: 1000, activePercentage: 80, statusColumn: 'Status', statusValues: ['Active'] };
-    const response = await fetch(API_BASE_URL + '/orchestrator/active-lines-detect?file_id=' + encodeURIComponent(fileId), { method: 'POST' });
-    if (!response.ok) throw await parseError(response, 'Erreur lors de la détection des lignes actives');
-    const data = await response.json();
-    return { totalLines: data.total_lines_count || 0, activeLines: data.active_lines_count || 0,
-      activePercentage: data.active_lines_percentage || 0, statusColumn: data.active_status_column || '',
-      statusValues: data.active_status_values || [] };
-  }
-
-  static async analyzeKYC(fileId: string): Promise<KYCAnalysisResult> {
-    if (USE_MOCK) return { fileId, fileName: 'data.csv', totalRows: 1250, analyzedRows: 1000, anomalies: [],
-      riskScore: 35, riskLevel: 'MEDIUM', detectedCountry: 'FR', detectedSchema: 'orange_money',
-      analysisTime: 1, createdAt: new Date().toISOString() };
-    const startedAt = performance.now();
-    const response = await fetch(API_BASE_URL + '/orchestrator/analyze?file_id=' + encodeURIComponent(fileId), { method: 'POST' });
-    if (!response.ok) throw await parseError(response, "Erreur lors de l'analyse KYC");
-    const data = await response.json();
-    return { fileId, fileName: data.file_name || 'data.csv', totalRows: data.total_lines_count || data.active_rows_count || 0,
-      analyzedRows: data.active_rows_count || 0, anomalies: flattenAnomalies(data.anomalies_by_field || {}),
-      riskScore: Number(data.overall_risk_score || 0), riskLevel: data.overall_risk_level || 'LOW',
-      detectedCountry: data.country || 'Unknown', detectedSchema: data.is_orange_money ? 'orange_money' : 'other',
-      analysisTime: Math.round((performance.now() - startedAt) / 100) / 10, createdAt: new Date().toISOString() };
-  }
-
-  static async generateReport(fileId: string): Promise<AnalysisReport> {
-    if (USE_MOCK) return { analysis: { fileId, fileName: 'data.csv', totalRows: 1250, analyzedRows: 1000, anomalies: [],
-      riskScore: 35, riskLevel: 'MEDIUM', detectedCountry: 'FR', detectedSchema: 'orange_money', analysisTime: 0, createdAt: new Date().toISOString() },
-      summary: { totalAnomalies: 1, criticalAnomalies: 0, warningAnomalies: 1, infoAnomalies: 0, affectedRows: 1, complianceScore: 85 } };
-    const response = await fetch(API_BASE_URL + '/orchestrator/report/' + encodeURIComponent(fileId));
-    if (!response.ok) throw await parseError(response, 'Erreur lors de la génération du rapport');
-    const data = await response.json();
-    const anomalies = flattenAnomalies(data.anomalies || {});
-    const riskLevel = data.summary?.overall_risk_level || 'LOW';
-    const affectedRows = new Set(anomalies.map((item) => item.row).filter((row) => row > 0)).size;
-    return { analysis: { fileId, fileName: data.file_name || 'data.csv', totalRows: Number(data.row_count || 0),
-      analyzedRows: Number(data.active_lines?.active_lines_count || 0), anomalies,
-      riskScore: Number(data.summary?.overall_risk_score || 0), riskLevel: riskLevel === 'UNKNOWN' ? 'LOW' : riskLevel,
-      detectedCountry: data.country?.country || 'Unknown', detectedSchema: data.schema?.is_orange_money ? 'orange_money' : 'other',
-      analysisTime: 0, createdAt: new Date().toISOString() },
-      summary: { totalAnomalies: Number(data.summary?.total_anomalies || anomalies.length),
-        criticalAnomalies: anomalies.filter((item) => item.severity === 'error').length,
-        warningAnomalies: anomalies.filter((item) => item.severity === 'warning').length,
-        infoAnomalies: anomalies.filter((item) => item.severity === 'info').length,
-        affectedRows, complianceScore: Number(data.summary?.overall_compliance_rate || 0) } };
-  }
-
-  static async getAnalysisHistory(page = 1, pageSize = 10): Promise<{ analyses: AnalysisResponse[]; total: number; page: number; pageSize: number }> {
-    if (USE_MOCK) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       return {
-        analyses: Array.from({ length: Math.min(pageSize, 3) }, (_, index) => ({
-          id: 'mock-analysis-' + index,
-          fileId: 'mock-file-' + index,
-          fileName: ['clients.csv', 'kyc_export.xlsx', 'orange_money.csv'][index],
-          fileType: index === 1 ? 'xlsx' : 'csv',
-          fileSize: 1024 * 1024,
-          riskScore: [18, 47, 72][index],
-          riskLevel: ['LOW', 'MEDIUM', 'HIGH'][index],
-          rowsAnalyzed: [1200, 8450, 320][index],
-          totalRows: [1500, 9000, 500][index],
-          anomalyCount: [4, 82, 31][index],
-          status: 'completed',
-          createdAt: new Date(Date.now() - index * 86400000).toISOString(),
-        })),
-        total: 3,
-        page,
+        fileId,
+        isOrangeMoney: false,
+        confidenceScore: 62,
+        matchedRequiredColumns: [],
+        missingRequiredColumns: ['USER_ID', 'ACCOUNT_STATUS'],
+        allDetectedColumns: ['Nom', 'Prénom', 'MSISDN', 'ID Type', 'ID Number', 'DOB', 'Address', 'City', 'Status'],
+        mappingStatus: 'pending_user_input',
+        selectedColumns: {},
+      };
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/orchestrator/schema-detect?file_id=${fileId}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+    );
+
+    const data = await handleResponse<Record<string, any>>(response, 'la détection du schéma');
+
+    const selectedColumns: KYCColumnMapping = data.is_orange_money
+      ? {
+          nomColumn: data.nom_column,
+          prenomColumn: data.prenom_column,
+          msisdnColumn: data.msisdn_column,
+          idTypeColumn: data.id_type_column,
+          idNumberColumn: data.id_number_column,
+          dobColumn: data.dob_column,
+          addressColumn: data.address_column,
+          cityColumn: data.city_column,
+          statusColumn: data.status_column,
+        }
+      : {};
+
+    return {
+      fileId,
+      isOrangeMoney: data.is_orange_money,
+      confidenceScore: data.confidence_score ?? 0,
+      matchedRequiredColumns: data.matched_required_columns || [],
+      missingRequiredColumns: data.missing_required_columns || [],
+      allDetectedColumns: data.all_detected_columns || [],
+      mappingStatus: data.mapping_status || 'error',
+      selectedColumns,
+    };
+  }
+
+  /**
+   * Étape 3b : Valider le mapping de colonnes
+   * POST /orchestrator/validate-schema?file_id=...&nom_column=...
+   */
+  static async validateSchema(
+    fileId: string,
+    columns: KYCColumnMapping
+  ): Promise<void> {
+    if (USE_MOCK) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return;
+    }
+
+    const params = new URLSearchParams({
+      file_id: fileId,
+      nom_column: columns.nomColumn || '',
+      prenom_column: columns.prenomColumn || '',
+      msisdn_column: columns.msisdnColumn || '',
+      dob_column: columns.dobColumn || '',
+      id_type_column: columns.idTypeColumn || '',
+      id_number_column: columns.idNumberColumn || '',
+      status_column: columns.statusColumn || '',
+      address_column: columns.addressColumn || '',
+      city_column: columns.cityColumn || '',
+    });
+
+    const response = await fetch(
+      `${API_BASE_URL}/orchestrator/validate-schema?${params}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+    );
+
+    await handleResponse(response, 'la validation du schéma');
+  }
+
+  /**
+   * Étape 4 : Détecter le pays
+   * POST /orchestrator/country-detect?file_id=...
+   */
+  static async detectCountry(fileId: string): Promise<CountryDetection> {
+    if (USE_MOCK) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      return {
+        fileId,
+        detectedCountry: 'Madagascar',
+        confidence: 0.87,
+        reasoning: 'Formats de numéros et de villes cohérents avec Madagascar.',
+        status: 'completed',
+      };
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/orchestrator/country-detect?file_id=${fileId}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+    );
+
+    const data = await handleResponse<Record<string, any>>(response, 'la détection du pays');
+
+    return {
+      fileId,
+      detectedCountry: data.detected_country,
+      confidence: data.country_detection_confidence ?? 0,
+      reasoning: data.country_detection_reasoning || '',
+      status: data.country_detection_status,
+    };
+  }
+
+  /**
+   * Étape 4b : Valider (ou corriger) le pays détecté
+   * POST /orchestrator/validate-country?file_id=...&country=...
+   */
+  static async validateCountry(fileId: string, country: string): Promise<void> {
+    if (USE_MOCK) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      return;
+    }
+
+    const params = new URLSearchParams({ file_id: fileId, country });
+    const response = await fetch(
+      `${API_BASE_URL}/orchestrator/validate-country?${params}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+    );
+
+    await handleResponse(response, 'la validation du pays');
+  }
+
+  /**
+   * Étape 5 : Détecter les lignes actives
+   * POST /orchestrator/active-lines-detect?file_id=...
+   */
+  static async detectActiveLines(fileId: string): Promise<ActiveLinesDetection> {
+    if (USE_MOCK) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      return {
+        totalLines: 10,
+        activeLines: 8,
+        activePercentage: 80,
+        statusColumn: 'Status',
+        statusValues: ['Active'],
+      };
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/orchestrator/active-lines-detect?file_id=${fileId}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+    );
+
+    const data = await handleResponse<Record<string, any>>(response, 'la détection des lignes actives');
+
+    return {
+      totalLines: data.total_lines_count,
+      activeLines: data.active_lines_count,
+      activePercentage: data.active_lines_percentage,
+      statusColumn: data.active_status_column,
+      statusValues: data.active_status_values || [],
+    };
+  }
+
+  /**
+   * Étape 6 : Analyser les données KYC (agent 2)
+   * POST /orchestrator/analyze?file_id=...
+   */
+  static async analyzeKYC(fileId: string): Promise<KYCAnalysisResult> {
+    if (USE_MOCK) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return {
+        fileId,
+        analysisStatus: 'completed',
+        overallRiskScore: 0.22,
+        overallRiskLevel: 'MEDIUM',
+        overallComplianceRate: 91.4,
+        activeRowsCount: 8,
+        totalAnomalies: 2,
+        anomaliesByField: {
+          msisdn: [{ type: 'non_numeric_values', count: 1, percentage: 12.5, severity: 'error' }],
+        },
+        criticalFields: [
+          { field: 'msisdn', anomaly: 'non_numeric_values', count: 1, percentage: 12.5 },
+        ],
+        executiveSummary: {
+          overallDataQuality: 'GOOD',
+          riskAssessment: 'MEDIUM',
+          fieldsWithIssues: 1,
+          criticalIssues: 1,
+          recommendation: '⚡ MEDIUM RISK: Proceed with caution. Monitor identified issues.',
+        },
+        detailedResults: {},
+      };
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/orchestrator/analyze?file_id=${fileId}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+    );
+
+    const data = await handleResponse<Record<string, any>>(response, "l'analyse KYC");
+
+    return {
+      fileId,
+      analysisStatus: data.analysis_status,
+      overallRiskScore: data.overall_risk_score ?? 0,
+      overallRiskLevel: data.overall_risk_level ?? 'LOW',
+      overallComplianceRate: data.overall_compliance_rate ?? 0,
+      activeRowsCount: data.active_rows_count ?? 0,
+      totalAnomalies: data.total_anomalies ?? 0,
+      anomaliesByField: data.anomalies_by_field ?? {},
+      criticalFields: data.critical_fields ?? [],
+      executiveSummary: {
+        overallDataQuality: data.executive_summary?.overall_data_quality ?? 'FAIR',
+        riskAssessment: data.executive_summary?.risk_assessment ?? 'LOW',
+        fieldsWithIssues: data.executive_summary?.fields_with_issues ?? 0,
+        criticalIssues: data.executive_summary?.critical_issues ?? 0,
+        recommendation: data.executive_summary?.recommendation ?? '',
+      },
+      detailedResults: data.detailed_results ?? {},
+    };
+  }
+
+  /**
+   * Étape 7 : Récupérer le rapport final (agent 3)
+   * GET /orchestrator/report/{fileId}
+   */
+  static async generateReport(fileId: string): Promise<AnalysisReport> {
+    if (USE_MOCK) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return {
+        fileId,
+        fileName: 'data.csv',
+        detectedCountry: 'Madagascar',
+        isOrangeMoney: false,
+        analysisStatus: 'completed',
+        overallRiskScore: 0.22,
+        overallRiskLevel: 'MEDIUM',
+        overallComplianceRate: 91.4,
+        executiveSummary: {
+          overallDataQuality: 'GOOD',
+          riskAssessment: 'MEDIUM',
+          fieldsWithIssues: 1,
+          criticalIssues: 1,
+          recommendation: '⚡ MEDIUM RISK: Proceed with caution.',
+        },
+        anomalies: [
+          { field: 'msisdn', type: 'non_numeric_values', count: 1, percentage: 12.5, severity: 'error' },
+        ],
+        summary: {
+          totalAnomalies: 1,
+          criticalAnomalies: 1,
+          warningAnomalies: 0,
+          infoAnomalies: 0,
+          affectedRows: 1,
+          complianceScore: 91.4,
+        },
+        fieldResults: {},
+        analyzedAt: new Date().toISOString(),
+      };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/orchestrator/report/${fileId}`);
+    const data = await handleResponse<Record<string, any>>(response, 'la génération du rapport');
+
+    return {
+      fileId: data.file_id,
+      fileName: data.file_name,
+      detectedCountry: data.detected_country,
+      isOrangeMoney: data.is_orange_money,
+      analysisStatus: data.analysis_status,
+      overallRiskScore: data.overall_risk_score ?? 0,
+      overallRiskLevel: data.overall_risk_level ?? 'LOW',
+      overallComplianceRate: data.overall_compliance_rate ?? 0,
+      executiveSummary: {
+        overallDataQuality: data.executive_summary?.overall_data_quality ?? 'FAIR',
+        riskAssessment: data.executive_summary?.risk_assessment ?? 'LOW',
+        fieldsWithIssues: data.executive_summary?.fields_with_issues ?? 0,
+        criticalIssues: data.executive_summary?.critical_issues ?? 0,
+        recommendation: data.executive_summary?.recommendation ?? '',
+      },
+      anomalies: (data.anomalies || []).map((a: any) => ({
+        field: a.field,
+        type: a.type,
+        count: a.count,
+        percentage: a.percentage,
+        severity: a.severity,
+      })),
+      summary: {
+        totalAnomalies: data.summary?.total_anomalies ?? 0,
+        criticalAnomalies: data.summary?.critical_anomalies ?? 0,
+        warningAnomalies: data.summary?.warning_anomalies ?? 0,
+        infoAnomalies: data.summary?.info_anomalies ?? 0,
+        affectedRows: data.summary?.affected_rows ?? 0,
+        complianceScore: data.summary?.compliance_score ?? 0,
+      },
+      fieldResults: data.field_results ?? {},
+      analyzedAt: data.analyzed_at,
+    };
+  }
+
+  /**
+   * Exporter le rapport en PDF
+   * GET /orchestrator/report/{fileId}/export/pdf
+   */
+  static async exportReportPdf(fileId: string): Promise<Blob> {
+    if (USE_MOCK) {
+      return new Blob(['Mock PDF Report'], { type: 'application/pdf' });
+    }
+
+    const response = await fetch(`${API_BASE_URL}/orchestrator/report/${fileId}/export/pdf`);
+    if (!response.ok) {
+      throw new Error("Erreur lors de l'export PDF");
+    }
+    return response.blob();
+  }
+
+  /**
+   * Historique des analyses (dashboard)
+   * GET /orchestrator/analyses?page=&page_size=&country=&sort=
+   */
+  static async getAnalysisHistory(
+    page: number = 1,
+    pageSize: number = 10,
+    country?: string,
+    sort: 'asc' | 'desc' = 'desc'
+  ): Promise<AnalysisHistory> {
+    if (USE_MOCK) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return {
+        analyses: [
+          {
+            id: 'mock-1',
+            fileId: 'mock-1',
+            fileName: 'kyc_mada_2026_01.csv',
+            fileType: 'csv',
+            country: 'Madagascar',
+            riskScore: 0.22,
+            riskLevel: 'MEDIUM',
+            complianceRate: 91.4,
+            rowsAnalyzed: 8420,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        total: 1,
+        page: 1,
         pageSize,
       };
     }
-    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
-    const response = await fetch(API_BASE_URL + '/orchestrator/analyses?' + params.toString());
-    if (!response.ok) throw await parseError(response, "Erreur lors du chargement de l'historique");
-    const data = await response.json();
+
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+      sort,
+    });
+    if (country) params.set('country', country);
+
+    const response = await fetch(`${API_BASE_URL}/orchestrator/analyses?${params}`);
+    const data = await handleResponse<Record<string, any>>(response, "le chargement de l'historique");
+
     return {
-      analyses: (data.analyses || []) as AnalysisResponse[],
-      total: Number(data.total || 0),
-      page: Number(data.page || page),
-      pageSize: Number(data.page_size || pageSize),
+      analyses: (data.analyses || []).map((a: any) => ({
+        id: a.id,
+        fileId: a.fileId,
+        fileName: a.fileName,
+        fileType: a.fileType,
+        country: a.country,
+        riskScore: a.riskScore,
+        riskLevel: a.riskLevel,
+        complianceRate: a.complianceRate,
+        rowsAnalyzed: a.rowsAnalyzed,
+        createdAt: a.createdAt,
+      })),
+      total: data.total ?? 0,
+      page: data.page ?? page,
+      pageSize: data.pageSize ?? pageSize,
     };
   }
-
-  static async deleteAnalysis(analysisId: string): Promise<void> {
-    if (USE_MOCK) return;
-    const response = await fetch(API_BASE_URL + '/orchestrator/analyses/' + encodeURIComponent(analysisId), { method: 'DELETE' });
-    if (!response.ok) throw await parseError(response, 'Erreur lors de la suppression');
-  }
-
-  static async exportAnalysisPdf(analysisId: string): Promise<Blob> {
-    return this.exportReportPdf(analysisId);
-  }
-
-  static async exportReportPdf(fileId: string): Promise<Blob> {
-    if (USE_MOCK) return new Blob(['Mock PDF Report'], { type: 'application/pdf' });
-    const response = await fetch(API_BASE_URL + '/orchestrator/report/' + encodeURIComponent(fileId) + '/export/pdf');
-    if (!response.ok) throw await parseError(response, "Erreur lors de l'export PDF");
-    return response.blob();
-  }
-}
-
-function flattenAnomalies(raw: Record<string, unknown>): KYCAnalysisResult['anomalies'] {
-  const result: KYCAnalysisResult['anomalies'] = [];
-  Object.entries(raw || {}).forEach(([field, value]) => {
-    if (!Array.isArray(value)) return;
-    value.forEach((item, index) => {
-      if (!item || typeof item !== 'object') return;
-      const anomaly = item as Record<string, unknown>;
-      result.push({ id: String(anomaly.id ?? (field + '-' + index)), row: Number(anomaly.row ?? anomaly.row_number ?? 0),
-        column: String(anomaly.column ?? field), value: String(anomaly.value ?? ''),
-        anomalyType: String(anomaly.anomaly_type ?? anomaly.type ?? 'anomaly'),
-        description: String(anomaly.description ?? anomaly.message ?? 'Anomalie détectée'),
-        severity: anomaly.severity === 'error' || anomaly.severity === 'warning' ? anomaly.severity : 'info',
-        confidence: Number(anomaly.confidence ?? 0) });
-    });
-  });
-  return result;
 }
