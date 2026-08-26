@@ -2,214 +2,195 @@
 
 import { useState } from 'react';
 import { ApiService } from '../services/api';
-import { FileInfo, SchemaDetection, KYCAnalysisResult, AnalysisReport, PrepState } from '../types/analysis';
+import {
+  UploadResult,
+  PrepResult,
+  SchemaDetection,
+  CountryDetection,
+  ActiveLinesDetection,
+  KYCAnalysisResult,
+  AnalysisReport,
+  KYCColumnMapping,
+} from '../types/analysis';
 
-export type AnalysisStep = 'upload' | 'schema' | 'analysis' | 'report';
+export type AnalysisStep =
+  | 'upload'
+  | 'prep'
+  | 'schema'
+  | 'country'
+  | 'analysis'
+  | 'report';
 
 export function useKYCAnalysis() {
   const [currentStep, setCurrentStep] = useState<AnalysisStep>('upload');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Données du flux
   const [fileId, setFileId] = useState<string | null>(null);
-  const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
-  const [prepState, setPrepState] = useState<PrepState | null>(null);
+  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  const [prepResult, setPrepResult] = useState<PrepResult | null>(null);
   const [schemaDetection, setSchemaDetection] = useState<SchemaDetection | null>(null);
+  const [schemaAutoValidated, setSchemaAutoValidated] = useState<boolean>(false);
+  const [countryDetection, setCountryDetection] = useState<CountryDetection | null>(null);
+  const [activeLines, setActiveLines] = useState<ActiveLinesDetection | null>(null);
   const [analysisResult, setAnalysisResult] = useState<KYCAnalysisResult | null>(null);
   const [report, setReport] = useState<AnalysisReport | null>(null);
 
+  const runStep = async <T,>(
+    label: string,
+    fn: () => Promise<T>
+  ): Promise<T> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erreur inconnue';
+      console.error(`❌ ${label}:`, message);
+      setError(message);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Étape 1 : Upload
   const uploadFile = async (file: File) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const info = await ApiService.uploadFile(file);
-      setFileId(info.fileId);
-      setFileInfo(info);
-      setPrepState(info.prepState);
-      return info;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de l’upload';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    return runStep('Upload', async () => {
+      const result = await ApiService.uploadFile(file);
+      setFileId(result.fileId);
+      setUploadResult(result);
+      setCurrentStep('prep');
+      return result;
+    });
   };
 
+    // Étape 2 : Prep agent (profiling du fichier — délimiteur, colonnes, échantillon)
+    // Étape 2 : Prep agent (profiling du fichier — délimiteur, colonnes, échantillon)
   const runPrep = async () => {
-    if (!prepState) throw new Error('Aucun état de préparation disponible');
-    setIsLoading(true);
-    setError(null);
-    try {
-      const prepared = await ApiService.runPrep(prepState);
-      if (prepared.prep_status === 'error') {
-        throw new Error(prepared.prep_error || 'La préparation du fichier a échoué');
+    if (!uploadResult) throw new Error('Aucun fichier uploadé');
+    return runStep('Prep', async () => {
+      const result = await ApiService.runPrep(uploadResult.prepState);
+      setPrepResult(result);
+      if (result.prepStatus === 'error') {
+        throw new Error(result.prepError || 'Échec de la préparation du fichier');
       }
-      setPrepState(prepared);
-      const profile = prepared.dataset_profile;
-      if (profile && fileInfo) {
-        const columns = profile.columns;
-        const preview = profile.sample_rows.map((row) => columns.map((column) => String(row[column] ?? '')));
-        setFileInfo({ ...fileInfo, rowCount: profile.row_count, preview });
-      }
-      return prepared;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de la préparation';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  const detectSchema = async (detectedFileId?: string) => {
-    const id = detectedFileId || fileId;
-    if (!id) throw new Error('Aucun file ID disponible');
-    setIsLoading(true);
-    setError(null);
-    try {
-      const schema = await ApiService.detectSchema(id);
-      const profile = prepState?.dataset_profile;
-      if (profile) {
-        schema.fileInfo = {
-          ...schema.fileInfo,
-          fileName: prepState.file_name,
-          rowCount: profile.row_count,
-          delimiter: String(prepState.prep_meta?.csv_delimiter_used || schema.fileInfo.delimiter || ','),
-          preview: profile.sample_rows.map((row) => profile.columns.map((column) => String(row[column] ?? ''))),
-        };
-        schema.availableColumns = profile.columns;
-      }
+      const schema = await ApiService.detectSchema(uploadResult.fileId);
       setSchemaDetection(schema);
-      setCurrentStep('schema');
-      return schema;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de la détection du schéma';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  const validateSchema = async (selectedColumns: Record<string, string>) => {
-    if (!fileId) throw new Error('Aucun file ID disponible');
-    setIsLoading(true);
-    setError(null);
-    try {
-      await ApiService.validateSchema(fileId, selectedColumns);
-      return true;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de la validation du schéma';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      if (schema.isOrangeMoney) {
+        // Schéma connu et fiable : pas besoin de confirmation manuelle.
+        await ApiService.validateSchema(uploadResult.fileId, schema.selectedColumns);
+        setSchemaAutoValidated(true); // déclenche le bandeau côté UI
+        const country = await ApiService.detectCountry(uploadResult.fileId);
+        setCountryDetection(country);
+        setCurrentStep('country');
+      } else {
+        setSchemaAutoValidated(false);
+        setCurrentStep('schema');
+      }
 
-  const detectCountry = async () => {
-    if (!fileId) throw new Error('Aucun file ID disponible');
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await ApiService.detectCountry(fileId);
       return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de la détection du pays';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    });
   };
 
+  // Permet à l'UI de fermer le bandeau sans affecter le flux d'analyse
+  const dismissSchemaBanner = () => setSchemaAutoValidated(false);
+
+  // Étape 3 : Valider le mapping de colonnes KYC (cas non-Orange Money uniquement)
+  const validateSchema = async (columns: KYCColumnMapping) => {
+    if (!fileId) throw new Error('Aucun fichier sélectionné');
+    return runStep('Validation du schéma', async () => {
+      await ApiService.validateSchema(fileId, columns);
+      const country = await ApiService.detectCountry(fileId);
+      setCountryDetection(country);
+      setCurrentStep('country');
+      return true;
+    });
+  };
+
+  // Étape 4 : Confirmer (ou corriger) le pays détecté
   const validateCountry = async (country: string) => {
-    if (!fileId) throw new Error('Aucun file ID disponible');
-    setIsLoading(true);
-    setError(null);
-    try {
+    if (!fileId) throw new Error('Aucun fichier sélectionné');
+    return runStep('Validation du pays', async () => {
       await ApiService.validateCountry(fileId, country);
-      return true;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de la validation du pays';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const detectActiveLines = async () => {
-    if (!fileId) throw new Error('Aucun file ID disponible');
-    setIsLoading(true);
-    setError(null);
-    try {
-      return await ApiService.detectActiveLines(fileId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de la détection des lignes actives';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const analyzeKYC = async () => {
-    if (!fileId) throw new Error('Aucun file ID disponible');
-    setIsLoading(true);
-    setError(null);
-    try {
+      setCountryDetection((prev) =>
+        prev ? { ...prev, detectedCountry: country, status: 'completed' } : prev
+      );
+      // Enchaîne sur la détection des lignes actives puis l'analyse
+      const lines = await ApiService.detectActiveLines(fileId);
+      setActiveLines(lines);
       const result = await ApiService.analyzeKYC(fileId);
-      const normalized = {
-        ...result,
-        totalRows: result.totalRows || fileInfo?.rowCount || 0,
-        detectedCountry: schemaDetection?.detectedCountry || result.detectedCountry,
-        detectedSchema: schemaDetection?.detectedSchema || result.detectedSchema,
-      };
-      setAnalysisResult(normalized);
+      setAnalysisResult(result);
       setCurrentStep('analysis');
-      return normalized;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de l’analyse KYC';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const generateReport = async () => {
-    if (!fileId) throw new Error('Aucun file ID disponible');
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await ApiService.generateReport(fileId);
-      setReport(result);
-      setCurrentStep('report');
       return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur lors de la génération du rapport';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    });
   };
 
+  // Étape 5 : Générer le rapport final (agent 3)
+  const generateReport = async () => {
+    if (!fileId) throw new Error('Aucun fichier sélectionné');
+    return runStep('Génération du rapport', async () => {
+      const rep = await ApiService.generateReport(fileId);
+      setReport(rep);
+      setCurrentStep('report');
+      return rep;
+    });
+  };
+
+  const exportReportPdf = async () => {
+    if (!fileId) throw new Error('Aucun fichier sélectionné');
+    return runStep('Export PDF', async () => {
+      const blob = await ApiService.exportReportPdf(fileId);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `kyc-report-${fileId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    });
+  };
+
+  // Réinitialiser
+    // Réinitialiser
   const reset = () => {
     setCurrentStep('upload');
     setFileId(null);
-    setFileInfo(null);
-    setPrepState(null);
+    setUploadResult(null);
+    setPrepResult(null);
     setSchemaDetection(null);
+    setSchemaAutoValidated(false); // NOUVEAU
+    setCountryDetection(null);
+    setActiveLines(null);
     setAnalysisResult(null);
     setReport(null);
     setError(null);
   };
 
   return {
-    currentStep, isLoading, error, fileId, fileInfo, prepState, schemaDetection,
-    analysisResult, report, uploadFile, runPrep, detectSchema, validateSchema,
-    detectCountry, validateCountry, detectActiveLines, analyzeKYC, generateReport, reset,
+    currentStep,
+    isLoading,
+    error,
+    fileId,
+    uploadResult,
+    prepResult,
+    schemaDetection,
+    schemaAutoValidated,   // NOUVEAU
+    dismissSchemaBanner,   // NOUVEAU
+    countryDetection,
+    activeLines,
+    analysisResult,
+    report,
+    uploadFile,
+    runPrep,
+    validateSchema,
+    validateCountry,
+    generateReport,
+    exportReportPdf,
+    reset,
   };
 }

@@ -3,7 +3,8 @@
 import { KYCAnalysisResult } from '@/src/types/analysis';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/card';
 import { Button } from '@/src/components/ui/button';
-import { AlertCircle, CheckCircle, AlertTriangle, Info } from 'lucide-react';
+import { AnomalyCard } from '@/src/components/analysis/AnomalyCard';
+import { fieldLabel, complianceColor, riskBadgeClasses } from '@/src/lib/kycFields';
 
 interface AnalysisStepProps {
   result: KYCAnalysisResult;
@@ -12,162 +13,119 @@ interface AnalysisStepProps {
 }
 
 export function AnalysisStep({ result, onComplete, isLoading }: AnalysisStepProps) {
-  const getSeverityIcon = (severity: string) => {
-    switch (severity) {
-      case 'error':
-        return <AlertCircle className="w-5 h-5 text-red-500" />;
-      case 'warning':
-        return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
-      case 'info':
-        return <Info className="w-5 h-5 text-blue-500" />;
-      default:
-        return null;
-    }
-  };
+  const fieldEntries = Object.entries(result.detailedResults).filter(
+    ([, data]) => data?.status === 'completed' && typeof data.complianceRate === 'number'
+  );
 
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case 'error':
-        return 'border-l-4 border-l-red-500 bg-red-50';
-      case 'warning':
-        return 'border-l-4 border-l-yellow-500 bg-yellow-50';
-      case 'info':
-        return 'border-l-4 border-l-blue-500 bg-blue-50';
-      default:
-        return 'border-l-4 border-l-gray-500 bg-gray-50';
-    }
-  };
-
-  const getRiskColor = (level: string) => {
-    switch (level) {
-      case 'LOW':
-        return 'bg-green-100 text-green-800';
-      case 'MEDIUM':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'HIGH':
-        return 'bg-orange-100 text-orange-800';
-      case 'CRITICAL':
-        return 'bg-red-100 text-red-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
-  };
+  // Toutes les anomalies aplaties, triées par sévérité (error d'abord)
+  const severityOrder = { error: 0, warning: 1, info: 2 };
+  const allAnomalies = Object.entries(result.anomaliesByField)
+    .flatMap(([field, anomalies]) => anomalies.map((a) => ({ field, ...a })))
+    .sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 
   return (
     <div className="space-y-6">
-      {/* Résumé de l'analyse */}
-      <Card className="border-orange-500 bg-orange-50">
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Analyse KYC complétée</span>
-            <span className="text-sm text-gray-600">{result.analysisTime}s</span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Score de risque</p>
-              <p className="text-2xl font-bold text-orange-600">{result.riskScore}%</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Niveau</p>
-              <span className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${getRiskColor(result.riskLevel)}`}>
-                {result.riskLevel}
-              </span>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Lignes analysées</p>
-              <p className="text-2xl font-bold text-orange-600">
-                {result.analyzedRows.toLocaleString()}
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Anomalies</p>
-              <p className="text-2xl font-bold text-orange-600">
-                {result.anomalies.length}
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Infos détection */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Cartes de synthèse */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-gray-600 mb-1">Pays détecté</p>
-            <p className="text-xl font-bold text-gray-900">{result.detectedCountry}</p>
+            <p className="text-sm text-gray-600 mb-1">Conformité globale</p>
+            <p className="text-2xl font-semibold text-gray-900">
+              {result.overallComplianceRate}%
+            </p>
           </CardContent>
         </Card>
+
+        <Card className={result.overallRiskLevel !== 'LOW' ? 'border-yellow-200 bg-yellow-50' : ''}>
+          <CardContent className="pt-6">
+            <p className="text-sm text-gray-600 mb-1">Niveau de risque</p>
+            <span
+              className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${riskBadgeClasses(
+                result.overallRiskLevel
+              )}`}
+            >
+              {result.overallRiskLevel}
+            </span>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-gray-600 mb-1">Schéma</p>
-            <p className="text-xl font-bold text-gray-900">
-              {result.detectedSchema === 'orange_money' ? 'Orange Money' : 'Autre'}
+            <p className="text-sm text-gray-600 mb-1">Lignes actives analysées</p>
+            <p className="text-2xl font-semibold text-gray-900">
+              {result.activeRowsCount.toLocaleString('fr-FR')}
             </p>
           </CardContent>
         </Card>
       </div>
 
+      {/* Conformité par champ */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Conformité par champ KYC</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {fieldEntries.length === 0 ? (
+            <p className="text-sm text-gray-500">Aucun champ analysé.</p>
+          ) : (
+            <div className="space-y-1">
+              {fieldEntries.map(([field, data]) => {
+                const rate = data.complianceRate as number;
+                const colors = complianceColor(rate);
+                return (
+                  <div
+                    key={field}
+                    className="grid grid-cols-[130px_1fr_60px] items-center gap-3 py-2 border-b last:border-b-0"
+                  >
+                    <span className="text-sm text-gray-900">{fieldLabel(field)}</span>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${colors.bar}`}
+                        style={{ width: `${Math.min(rate, 100)}%` }}
+                      />
+                    </div>
+                    <span className={`text-sm text-right ${colors.text}`}>{rate}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Anomalies */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            Anomalies détectées ({result.anomalies.length})
+            Anomalies détectées ({result.totalAnomalies})
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {result.anomalies.length === 0 ? (
+          {allAnomalies.length === 0 ? (
             <div className="flex items-center gap-3 p-4 bg-green-50 rounded-lg">
-              <CheckCircle className="w-6 h-6 text-green-500" />
               <div>
                 <p className="font-semibold text-green-900">Aucune anomalie détectée</p>
-                <p className="text-sm text-green-700">Les données semblent valides</p>
+                <p className="text-sm text-green-700">Les données semblent conformes</p>
               </div>
             </div>
           ) : (
-            <div className="space-y-3">
-              {result.anomalies.map((anomaly) => (
-                <div
-                  key={anomaly.id}
-                  className={`p-4 rounded-lg ${getSeverityColor(anomaly.severity)}`}
-                >
-                  <div className="flex items-start gap-3">
-                    {getSeverityIcon(anomaly.severity)}
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="font-semibold text-gray-900">
-                          {anomaly.anomalyType}
-                        </p>
-                        <span className="text-xs font-medium text-gray-600">
-                          Ligne {anomaly.row}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-700 mb-2">
-                        {anomaly.description}
-                      </p>
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs text-gray-600">
-                          Colonne: <span className="font-mono">{anomaly.column}</span>
-                        </p>
-                        <p className="text-xs text-gray-600">
-                          Confiance: <span className="font-semibold">{anomaly.confidence}%</span>
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+            <div className="space-y-2">
+              {allAnomalies.map((a, idx) => (
+                <AnomalyCard
+                  key={`${a.field}-${a.type}-${idx}`}
+                  field={a.field}
+                  type={a.type}
+                  count={a.count}
+                  percentage={a.percentage}
+                  severity={a.severity}
+                />
               ))}
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Boutons */}
-      <div className="flex gap-4 justify-end">
-        <Button variant="outline">
-          Retour
-        </Button>
+      <div className="flex justify-end">
         <Button
           onClick={onComplete}
           disabled={isLoading}
