@@ -54,7 +54,6 @@ export function useKYCAnalysis() {
       setIsLoading(false);
     }
   };
-
   // Étape 1 : Upload
   const uploadFile = async (file: File) => {
     return runStep('Upload', async () => {
@@ -66,25 +65,25 @@ export function useKYCAnalysis() {
     });
   };
 
-    // Étape 2 : Prep agent (profiling du fichier — délimiteur, colonnes, échantillon)
-    // Étape 2 : Prep agent (profiling du fichier — délimiteur, colonnes, échantillon)
-  const runPrep = async () => {
-    if (!uploadResult) throw new Error('Aucun fichier uploadé');
+  // Étape 2 : Prep agent — accepte le résultat d'upload en paramètre pour éviter
+  // toute dépendance à un state pas encore re-rendu (voir handleUpload dans page.tsx)
+  const runPrep = async (upload?: UploadResult) => {
+    const uploadData = upload ?? uploadResult;
+    if (!uploadData) throw new Error('Aucun fichier uploadé');
     return runStep('Prep', async () => {
-      const result = await ApiService.runPrep(uploadResult.prepState);
+      const result = await ApiService.runPrep(uploadData.prepState);
       setPrepResult(result);
       if (result.prepStatus === 'error') {
         throw new Error(result.prepError || 'Échec de la préparation du fichier');
       }
 
-      const schema = await ApiService.detectSchema(uploadResult.fileId);
+      const schema = await ApiService.detectSchema(uploadData.fileId);
       setSchemaDetection(schema);
 
       if (schema.isOrangeMoney) {
-        // Schéma connu et fiable : pas besoin de confirmation manuelle.
-        await ApiService.validateSchema(uploadResult.fileId, schema.selectedColumns);
-        setSchemaAutoValidated(true); // déclenche le bandeau côté UI
-        const country = await ApiService.detectCountry(uploadResult.fileId);
+        await ApiService.validateSchema(uploadData.fileId, schema.selectedColumns);
+        setSchemaAutoValidated(true);
+        const country = await ApiService.detectCountry(uploadData.fileId);
         setCountryDetection(country);
         setCurrentStep('country');
       } else {

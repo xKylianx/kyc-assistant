@@ -4,8 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Float, Integer, JSON, String, Text
 from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
+from src.db.base import Base
 
 
 class ActiveLinesDetection(Base):

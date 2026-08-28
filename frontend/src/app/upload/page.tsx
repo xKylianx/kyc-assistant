@@ -41,10 +41,10 @@ export default function UploadPage() {
     reset,
   } = useKYCAnalysis();
 
-  const handleUpload = async (file: File) => {
+    const handleUpload = async (file: File) => {
     try {
-      await uploadFile(file);
-      await runPrep();
+      const upload = await uploadFile(file);
+      await runPrep(upload);
     } catch (err) {
       console.error('Erreur upload:', err);
     }
