@@ -105,14 +105,14 @@ class ChunkedColumn:
 
 # Initialize the LLM (adjust based on your setup)
 model = ChatOpenAI(
-     model= "openai/gpt-5-chat",
+     model= os.getenv("LLM_PROXY_MODEL"),  # Adjust based on your config
      api_key=os.getenv("OPENAI_API_KEY"),
      base_url = os.getenv("BASE_URL"),
 )
 
 model_5_1 = ChatOpenAI(
-        model= "openai/gpt-5.1",
-        api_key=os.getenv("OPENAI_API_KEY_GPT_5_1"),
+        model= os.getenv("LLM_PROXY_MODEL"),
+        api_key=os.getenv("OPENAI_API_KEY"),
         base_url = os.getenv("BASE_URL"),
 )
 

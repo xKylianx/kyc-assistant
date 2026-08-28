@@ -90,9 +90,13 @@ def run_prep(
 def schema_detect(
     file_id: str,
     db: Session = Depends(get_db),
-) -> Dict[str, Any]:
-    """Detect Orange Money schema and candidate KYC column mapping."""
-    uploaded_file = _get_file(db, file_id)
+):
+    uploaded_file = db.query(UploadedFile).filter(
+        UploadedFile.file_id == file_id
+    ).first()
+
+    if not uploaded_file:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found")
 
     detection_result = detect_schema(
         db=db,
@@ -101,10 +105,22 @@ def schema_detect(
         detected_delimiter=uploaded_file.detected_delimiter,
     )
 
+    # Si pas Orange Money, propose un mapping via LLM plutôt que de laisser
+    # l'utilisateur repartir de zéro sur des selects vides.
+    if not detection_result.get("is_orange_money", False):
+        from src.services.column_suggestion_service import suggest_column_mapping
+
+        suggested = suggest_column_mapping(
+            file_path=uploaded_file.file_path,
+            delimiter=uploaded_file.detected_delimiter or ",",
+            available_columns=detection_result.get("all_detected_columns", []),
+        )
+        detection_result.update(suggested)
+
     upsert_schema_mapping(
         db=db,
         file_id=file_id,
-        is_orange_money=bool(detection_result.get("is_orange_money", False)),
+        is_orange_money=detection_result.get("is_orange_money", False),
         confidence_score=detection_result.get("confidence_score"),
         mapping_status=detection_result.get("mapping_status", "error"),
         nom_column=detection_result.get("nom_column"),
@@ -117,20 +133,11 @@ def schema_detect(
         address_column=detection_result.get("address_column"),
         city_column=detection_result.get("city_column"),
         detection_error=detection_result.get("schema_detection_error"),
-        # JSON, not str(list), so the frontend/report can consume it safely.
-        all_detected_columns=json.dumps(
-            detection_result.get("all_detected_columns", []),
-            ensure_ascii=False,
-        ),
+        all_detected_columns=str(detection_result.get("all_detected_columns")),
     )
     db.commit()
 
-    return {
-        "status": "ok",
-        "file_id": file_id,
-        **detection_result,
-    }
-
+    return detection_result
 
 @router.post("/validate-schema")
 def validate_schema(

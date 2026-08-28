@@ -11,7 +11,7 @@ load_dotenv()
 
 # Initialize the LLM (adjust based on your setup)
 model = ChatOpenAI(
-     model= "openai/gpt-5-chat",
+     model= os.getenv("LLM_PROXY_MODEL"),  # Adjust based on your config
      api_key=os.getenv("OPENAI_API_KEY"),
      base_url = os.getenv("BASE_URL"),
 )
