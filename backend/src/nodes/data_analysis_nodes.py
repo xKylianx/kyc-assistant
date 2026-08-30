@@ -24,10 +24,9 @@ def _sql_literal(value: str) -> str:
 
 class ChunkedColumn:
     """
-    Lazy column reader backed by DuckDB.
-
-    Iteration fetches at most ANALYSIS_CHUNK_SIZE rows at a time. This keeps
-    large CSV analysis bounded in memory instead of calling fetchall().
+    Lazy column reader backed by DuckDB. Iteration fetches at most
+    ANALYSIS_CHUNK_SIZE rows at a time, keeping large CSV analysis bounded
+    in memory instead of calling fetchall().
     """
 
     def __init__(
@@ -48,35 +47,50 @@ class ChunkedColumn:
         self.active_status_column = active_status_column
         self.active_status_values = active_status_values or []
         self.drop_nulls = drop_nulls
+        self.uppercase = uppercase  # NOTE: manquait dans l'__init__ d'origine
         self.expected_length = expected_length
         self.chunk_size = chunk_size
-
-    def _where_clause(self) -> str:
-        if not self.active_status_column or not self.active_status_values:
-            return ""
-        values = ", ".join(_sql_literal(v) for v in self.active_status_values)
-        return f" WHERE {_sql_ident(self.active_status_column)} IN ({values})"
 
     def _relation(self) -> str:
         path = str(self.file_path).replace("'", "''")
         delim = str(self.delimiter).replace("'", "''")
-        return f"read_csv_auto({_sql_literal(path)}, delim={_sql_literal(delim)})"
+        return (
+            f"read_csv_auto({_sql_literal(path)}, delim={_sql_literal(delim)}, "
+            f"header=True, ignore_errors=True)"
+        )
+
+    def _conditions(self) -> list[str]:
+        conditions = []
+        if self.active_status_column and self.active_status_values:
+            values = ", ".join(_sql_literal(v) for v in self.active_status_values)
+            conditions.append(f"{_sql_ident(self.active_status_column)} IN ({values})")
+        if self.drop_nulls:
+            conditions.append(f"{_sql_ident(self.column)} IS NOT NULL")
+            conditions.append(
+                f"TRIM(CAST({_sql_ident(self.column)} AS VARCHAR)) <> ''"
+            )
+        return conditions
+
+    def _where_sql(self) -> str:
+        conditions = self._conditions()
+        if not conditions:
+            return ""
+        return " WHERE " + " AND ".join(conditions)
 
     def __iter__(self):
         con = duckdb.connect(database=":memory:")
         try:
             query = (
                 f"SELECT CAST({_sql_ident(self.column)} AS VARCHAR) "
-                f"FROM {self._relation()}{self._where_clause()}"
+                f"FROM {self._relation()}{self._where_sql()}"
             )
+            print(query)
             cursor = con.execute(query)
             while True:
                 rows = cursor.fetchmany(self.chunk_size)
                 if not rows:
                     break
                 for (value,) in rows:
-                    if self.drop_nulls and (value is None or str(value).strip() == ""):
-                        continue
                     normalized = "" if value is None else str(value).strip()
                     yield normalized.upper() if self.uppercase else normalized
         finally:
@@ -88,19 +102,11 @@ class ChunkedColumn:
 
         con = duckdb.connect(database=":memory:")
         try:
-            null_filter = (
-                f" AND {_sql_ident(self.column)} IS NOT NULL "
-                f"AND TRIM(CAST({_sql_ident(self.column)} AS VARCHAR)) <> ''"
-                if self.drop_nulls
-                else ""
-            )
-            return int(con.execute(
-                f"SELECT COUNT(*) FROM {self._relation()}"
-                f"{self._where_clause()}{' WHERE ' if self._where_clause() else ' AND '}{'1=1' if not null_filter else '1=1'}{null_filter}"
-            ).fetchone()[0])
+            query = f"SELECT COUNT(*) FROM {self._relation()}{self._where_sql()}"
+            print(query)
+            return int(con.execute(query).fetchone()[0])
         finally:
             con.close()
-
 
 
 # Initialize the LLM (adjust based on your setup)
@@ -161,11 +167,6 @@ def analyze_msisdn(state: AnalysisAgentState) -> AnalysisAgentState:
             "error": "No file path or data provided"
         }
         return state
-    
-    # ✅ PRÉSERVER active_rows_count si nécessaire
-    if active_rows_count == 0 and data:
-        active_rows_count = len(data)
-        state["active_rows_count"] = active_rows_count
     
     try:
         con = duckdb.connect()
@@ -412,10 +413,6 @@ def analyze_first_name(state: AnalysisAgentState) -> AnalysisAgentState:
     print("\n" + "=" * 60)
     print("👤 ANALYZING FIRST NAME")
     print("=" * 60)
-
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -686,9 +683,6 @@ def analyze_last_name(state: AnalysisAgentState) -> AnalysisAgentState:
     print("👤 ANALYZING LAST NAME")
     print("=" * 60)
 
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -961,10 +955,6 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
     print("\n" + "=" * 60)
     print("🆔 ANALYZING ID TYPE")
     print("=" * 60)
-
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -1275,10 +1265,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
     print("\n" + "=" * 60)
     print("🔢 ANALYZING ID NUMBER")
     print("=" * 60)
-
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -1702,10 +1688,6 @@ def analyze_dob(state: AnalysisAgentState) -> AnalysisAgentState:
     print("📅 ANALYZING DATE OF BIRTH")
     print("=" * 60)
 
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
-    
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
     
@@ -2098,10 +2080,6 @@ def analyze_city(state: AnalysisAgentState) -> AnalysisAgentState:
     print("\n" + "=" * 60)
     print("🏙️ ANALYZING CITY")
     print("=" * 60)
-
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -2442,10 +2420,6 @@ def analyze_address(state: AnalysisAgentState) -> AnalysisAgentState:
     print("📍 ANALYZING ADDRESS")
     print("=" * 60)
 
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
-    
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
     
@@ -2741,193 +2715,4 @@ def analyze_address(state: AnalysisAgentState) -> AnalysisAgentState:
         }
         
         print("=" * 60)
-    
-        # ✅ AJOUTER L'AGRÉGATION À LA FIN
-        print("\n" + "=" * 60)
-        print("📊 AGGREGATING ANALYSIS RESULTS")
-        print("=" * 60)
-        
-        try:
-            # Récupérer tous les résultats
-            analyses = {
-                "msisdn": state.get("msisdn_analysis", {}),
-                "first_name": state.get("first_name_analysis", {}),
-                "last_name": state.get("last_name_analysis", {}),
-                "id_type": state.get("id_type_analysis", {}),
-                "id_number": state.get("id_number_analysis", {}),
-                "dob": state.get("dob_analysis", {}),
-                "city": state.get("city_analysis", {}),
-                "address": state.get("address_analysis", {}),
-            }
-            
-            # ====================================================================
-            # CALCULER LES SCORES GLOBAUX
-            # ====================================================================
-            
-            print(f"\n📊 Calculating global scores...")
-            
-            # Collecter les compliance rates
-            compliance_rates = []
-            risk_scores = []
-            anomalies_count = 0
-            
-            for field, analysis in analyses.items():
-                if analysis.get("status") == "completed":
-                    compliance = analysis.get("compliance_rate", 0)
-                    risk = analysis.get("risk_score", 0)
-                    anomalies = len(analysis.get("anomalies", []))
-                    
-                    compliance_rates.append(compliance)
-                    risk_scores.append(risk)
-                    anomalies_count += anomalies
-                    
-                    print(f"   • {field}: {compliance:.2f}% compliance, {risk} risk")
-            
-            # Moyenne des compliance rates
-            if compliance_rates:
-                overall_compliance_rate = sum(compliance_rates) / len(compliance_rates)
-            else:
-                overall_compliance_rate = 0.0
-            
-            # Moyenne des risk scores
-            if risk_scores:
-                overall_risk_score = sum(risk_scores) / len(risk_scores)
-            else:
-                overall_risk_score = 0.0
-            
-            # ====================================================================
-            # DÉTERMINER LE NIVEAU DE RISQUE GLOBAL
-            # ====================================================================
-            
-            if overall_risk_score <= 0.15:
-                overall_risk_level = "LOW"
-            elif overall_risk_score <= 0.35:
-                overall_risk_level = "MEDIUM"
-            elif overall_risk_score <= 0.55:
-                overall_risk_level = "HIGH"
-            else:
-                overall_risk_level = "CRITICAL"
-            
-            # ====================================================================
-            # COLLECTER TOUTES LES ANOMALIES
-            # ====================================================================
-            
-            print(f"\n📊 Collecting anomalies...")
-            
-            all_anomalies = {}
-            for field, analysis in analyses.items():
-                if analysis.get("status") == "completed":
-                    anomalies = analysis.get("anomalies", [])
-                    if anomalies:
-                        all_anomalies[field] = anomalies
-                        print(f"   • {field}: {len(anomalies)} anomalies")
-            
-            # ====================================================================
-            # CRÉER LE RÉSUMÉ EXÉCUTIF
-            # ====================================================================
-            
-            print(f"\n📊 Creating executive summary...")
-            
-            # Compter les champs complétés vs skippés
-            completed_fields = sum(1 for a in analyses.values() if a.get("status") == "completed")
-            skipped_fields = sum(1 for a in analyses.values() if a.get("status") == "skipped")
-            error_fields = sum(1 for a in analyses.values() if a.get("status") == "error")
-            
-            # Identifier les champs critiques
-            critical_fields = []
-            for field, analysis in analyses.items():
-                if analysis.get("status") == "completed":
-                    anomalies = analysis.get("anomalies", [])
-                    for anomaly in anomalies:
-                        if anomaly.get("severity") == "high":
-                            critical_fields.append({
-                                "field": field,
-                                "anomaly": anomaly.get("type"),
-                                "count": anomaly.get("count"),
-                                "percentage": anomaly.get("percentage")
-                            })
-            
-            # ====================================================================
-            # CONSTRUIRE LE RÉSULTAT AGRÉGÉ
-            # ====================================================================
-            
-            def get_recommendation(risk_level: str, critical_fields: list) -> str:
-                """Génère une recommandation basée sur le niveau de risque."""
-                if risk_level == "CRITICAL":
-                    return "⛔ CRITICAL: Reject this dataset. Multiple critical issues detected. Manual review required."
-                elif risk_level == "HIGH":
-                    return "⚠️ HIGH RISK: Review required. Address critical issues before processing."
-                elif risk_level == "MEDIUM":
-                    return "⚡ MEDIUM RISK: Proceed with caution. Monitor identified issues."
-                else:
-                    return "✅ LOW RISK: Dataset appears clean. Proceed with normal processing."
-            
-            aggregated_result = {
-                "status": "completed",
-                "file_id": state.get("file_id"),
-                "thread_id": state.get("thread_id"),
-                "country": state.get("country"),
-                "active_rows_count": state.get("active_rows_count"),
-                
-                # Scores globaux
-                "overall_compliance_rate": round(overall_compliance_rate, 2),
-                "overall_risk_score": round(overall_risk_score, 2),
-                "overall_risk_level": overall_risk_level,
-                
-                # Comptages
-                "fields_analyzed": {
-                    "completed": completed_fields,
-                    "skipped": skipped_fields,
-                    "errors": error_fields,
-                    "total": len(analyses)
-                },
-                
-                # Anomalies
-                "total_anomalies": anomalies_count,
-                "anomalies_by_field": all_anomalies,
-                "critical_fields": critical_fields,
-                
-                # Résultats détaillés
-                "detailed_results": analyses,
-                
-                # Résumé exécutif
-                "executive_summary": {
-                    "overall_data_quality": "EXCELLENT" if overall_compliance_rate >= 95 else 
-                                        "GOOD" if overall_compliance_rate >= 90 else
-                                        "FAIR" if overall_compliance_rate >= 80 else
-                                        "POOR",
-                    "risk_assessment": overall_risk_level,
-                    "fields_with_issues": len(all_anomalies),
-                    "critical_issues": len(critical_fields),
-                    "recommendation": get_recommendation(overall_risk_level, critical_fields)
-                }
-            }
-            
-            state["aggregated_results"] = aggregated_result
-            state["analysis_status"] = "completed"
-            
-            print(f"\n✅ Aggregation Complete")
-            print(f"   Overall Compliance: {overall_compliance_rate:.2f}%")
-            print(f"   Overall Risk: {overall_risk_level}")
-            print(f"   Risk Score: {overall_risk_score:.2f}")
-            print(f"   Anomalies: {anomalies_count}")
-            print(f"   Critical Fields: {len(critical_fields)}")
-            print("=" * 60)
-            
-            return state
-            
-        except Exception as e:
-            print(f"\n✗ Error during aggregation: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            
-            state["analysis_status"] = "error"
-            state["analysis_error"] = str(e)
-            state["aggregated_results"] = {
-                "status": "error",
-                "error": str(e)
-            }
-            
-            print("=" * 60)
-            return state
-
+        return state

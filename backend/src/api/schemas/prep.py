@@ -6,29 +6,23 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class PrepStateIn(BaseModel):
-    """
-    Minimal state required to launch the preparation agent.
-
-    user_id/thread_id are optional because the upload endpoint can create
-    them when the client does not provide them.
-    """
-
-    thread_id: Optional[str] = Field(default=None, min_length=1)
-    user_id: Optional[str] = Field(default=None, min_length=1)
-    file_id: str = Field(..., min_length=1)
-    file_name: str = Field(..., min_length=1)
-    file_path: str = Field(..., min_length=1)
-    prep_status: Literal["uploaded", "success", "error"] = "uploaded"
-    prep_error: Optional[str] = None
+    thread_id: Optional[str] = Field(None, description="Identifiant du thread")
+    user_id: Optional[str] = Field(None, description="Identifiant utilisateur")
+    file_id: str = Field(..., min_length=1, description="Identifiant du fichier")
+    file_name: str = Field(..., min_length=1, description="Nom du fichier")
+    file_path: str = Field(..., min_length=1, description="Chemin absolu/local du fichier")
+    prep_status: Literal["uploaded", "success", "error"] = Field(
+        ..., description="Statut de préparation"
+    )
+    prep_error: Optional[str] = Field(None, description="Message d'erreur éventuel")
 
     @field_validator("file_path")
     @classmethod
-    def validate_file_path(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
+    def validate_file_path(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
             raise ValueError("file_path cannot be empty")
-        return value
-
+        return v
 
 class PrepRequest(BaseModel):
     prep_state: PrepStateIn

@@ -11,8 +11,27 @@ import {
   KYCColumnMapping,
 } from '../types/analysis';
 
+import { normalizeSeverity } from '../lib/kycFields';
+
+
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
+
+function normalizeAnomaliesByField(
+  raw: Record<string, Array<{ type: string; count: number; percentage: number; severity: string }>>
+): Record<string, import('../types/analysis').FieldAnomaly[]> {
+  const result: Record<string, import('../types/analysis').FieldAnomaly[]> = {};
+  for (const [field, anomalies] of Object.entries(raw)) {
+    result[field] = anomalies.map((a) => ({
+      type: a.type,
+      count: a.count,
+      percentage: a.percentage,
+      severity: normalizeSeverity(a.severity),
+    }));
+  }
+  return result;
+}
 
 async function handleResponse<T>(response: Response, context: string): Promise<T> {
   if (!response.ok) {
@@ -361,7 +380,7 @@ export class ApiService {
       overallComplianceRate: data.overall_compliance_rate ?? 0,
       activeRowsCount: data.active_rows_count ?? 0,
       totalAnomalies: data.total_anomalies ?? 0,
-      anomaliesByField: data.anomalies_by_field ?? {},
+      anomaliesByField: normalizeAnomaliesByField(data.anomalies_by_field ?? {}),
       criticalFields: data.critical_fields ?? [],
       executiveSummary: {
         overallDataQuality: data.executive_summary?.overall_data_quality ?? 'FAIR',

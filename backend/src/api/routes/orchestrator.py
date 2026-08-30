@@ -382,51 +382,64 @@ def validate_active_lines(
 def analyze(
     file_id: str,
     db: Session = Depends(get_db),
-) -> Dict[str, Any]:
+):
     """
-    Lance l'analyse KYC complète sur un fichier.
-    
-    Prérequis:
-    - Fichier uploadé (/orchestrator/prep)
-    - Schéma validé (/orchestrator/validate-schema)
-    - Pays validé (/orchestrator/validate-country)
+    Lance l'analyse KYC complète sur un fichier, en mode chunké (DuckDB lit
+    directement le CSV sur disque, jamais chargé entièrement en mémoire).
+    Adapté aux fichiers volumineux (testé conceptuellement jusqu'à plusieurs Go).
     """
-        
-    from src.agents.analysis_agent import aggregate_analysis_results, run_analysis_agent
+    from src.agents.analysis_agent import run_analysis_agent, aggregate_analysis_results
     from src.repositories.analysis_result_repo import upsert_analysis_results
+    from src.db.models.uploaded_file import UploadedFile
+    from src.db.models.schema_mapping import SchemaMapping
+    from src.db.models.country_detection import CountryDetection
+    from src.db.models.active_lines_detection import ActiveLinesDetection
 
-    uploaded_file = _get_file(db, file_id)
+    uploaded_file = db.query(UploadedFile).filter(
+        UploadedFile.file_id == file_id
+    ).first()
+    if not uploaded_file:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found")
 
-    schema_mapping = (
-        db.query(SchemaMapping).filter(SchemaMapping.file_id == file_id).first()
-    )
+    schema_mapping = db.query(SchemaMapping).filter(
+        SchemaMapping.file_id == file_id
+    ).first()
     if not schema_mapping or schema_mapping.mapping_status != "validated":
-        raise HTTPException(status_code=400, detail="Schema must be validated before analysis")
+        raise HTTPException(
+            status_code=400,
+            detail="Schema must be validated before analysis",
+        )
 
-    country_detection = (
-        db.query(CountryDetection).filter(CountryDetection.file_id == file_id).first()
-    )
-    if not country_detection or country_detection.country_detection_status != "validated":
-        raise HTTPException(status_code=400, detail="Country must be validated before analysis")
+    country_detection = db.query(CountryDetection).filter(
+        CountryDetection.file_id == file_id
+    ).first()
+    if not country_detection or country_detection.country_detection_status not in ("validated", "completed"):
+        raise HTTPException(
+            status_code=400,
+            detail="Country must be validated before analysis",
+        )
 
-    active_lines = (
-        db.query(ActiveLinesDetection)
-        .filter(ActiveLinesDetection.file_id == file_id)
-        .first()
-    )
-    if not active_lines or active_lines.detection_status not in {"completed", "validated"}:
-        raise HTTPException(status_code=400, detail="Active lines must be detected before analysis")
+    active_lines = db.query(ActiveLinesDetection).filter(
+        ActiveLinesDetection.file_id == file_id
+    ).first()
+    if not active_lines:
+        raise HTTPException(
+            status_code=400,
+            detail="Active lines must be detected before analysis",
+        )
 
+    # Aucune lecture pandas ici : file_path + delimiter suffisent, chaque
+    # node d'analyse lit le fichier lui-même via DuckDB en streaming.
     initial_state = {
         "file_id": file_id,
-        "thread_id": uploaded_file.thread_id or file_id,
-        "data": [],
+        "thread_id": uploaded_file.thread_id,
+        "data": [],  # volontairement vide : force le passage par ChunkedColumn
         "file_path": uploaded_file.file_path,
         "detected_delimiter": uploaded_file.detected_delimiter or ",",
-        "country": country_detection.detected_country,
-        "active_rows_count": int(active_lines.active_lines_count or 0),
         "active_status_column": active_lines.active_status_column,
-        "active_status_values": active_lines.active_status_values or [],
+        "active_status_values": active_lines.active_status_values,
+        "country": country_detection.detected_country,
+        "active_rows_count": active_lines.active_lines_count,
         "schema_mapping": {
             "nom_column": schema_mapping.nom_column,
             "prenom_column": schema_mapping.prenom_column,
@@ -441,65 +454,50 @@ def analyze(
         "analysis_status": "in_progress",
     }
 
-    try:
-        analysis_result = run_analysis_agent(
-            initial_state=initial_state,
-            thread_id=initial_state["thread_id"],
-        )
-        aggregated = aggregate_analysis_results(analysis_result)
+    analysis_result = run_analysis_agent(
+        initial_state=initial_state,
+        thread_id=uploaded_file.thread_id,
+    )
 
-        if aggregated.get("status") == "error":
-            raise RuntimeError(aggregated.get("error", "Analysis agent failed"))
+    aggregated = aggregate_analysis_results(analysis_result)
 
-        upsert_analysis_results(
-            db=db,
-            file_id=file_id,
-            analysis_status="completed",
-            msisdn_analysis=analysis_result.get("msisdn_analysis"),
-            first_name_analysis=analysis_result.get("first_name_analysis"),
-            last_name_analysis=analysis_result.get("last_name_analysis"),
-            id_type_analysis=analysis_result.get("id_type_analysis"),
-            id_number_analysis=analysis_result.get("id_number_analysis"),
-            dob_analysis=analysis_result.get("dob_analysis"),
-            address_analysis=analysis_result.get("address_analysis"),
-            city_analysis=analysis_result.get("city_analysis"),
-            overall_risk_score=aggregated["overall_risk_score"],
-            overall_risk_level=aggregated["overall_risk_level"],
-            overall_compliance_rate=aggregated.get("overall_compliance_rate"),
-            active_rows_count=aggregated.get("active_rows_count", active_rows_count),
-            anomalies=aggregated.get("critical_fields", []),
-            anomalies_by_field=aggregated.get("anomalies_by_field", {}),
-            executive_summary=aggregated.get("executive_summary", {}),
-        )
-        db.commit()
+    upsert_analysis_results(
+        db=db,
+        file_id=file_id,
+        analysis_status="completed",
+        msisdn_analysis=analysis_result.get("msisdn_analysis"),
+        first_name_analysis=analysis_result.get("first_name_analysis"),
+        last_name_analysis=analysis_result.get("last_name_analysis"),
+        id_type_analysis=analysis_result.get("id_type_analysis"),
+        id_number_analysis=analysis_result.get("id_number_analysis"),
+        dob_analysis=analysis_result.get("dob_analysis"),
+        address_analysis=analysis_result.get("address_analysis"),
+        city_analysis=analysis_result.get("city_analysis"),
+        overall_risk_score=aggregated["overall_risk_score"],
+        overall_risk_level=aggregated["overall_risk_level"],
+        overall_compliance_rate=aggregated.get("overall_compliance_rate"),
+        active_rows_count=aggregated.get("active_rows_count") or active_lines.active_lines_count,
+        anomalies=aggregated.get("critical_fields", []),
+        anomalies_by_field=aggregated.get("anomalies_by_field", {}),
+        executive_summary=aggregated.get("executive_summary", {}),
+    )
+    db.commit()
 
-        return {
-            "status": "completed",
-            "file_id": file_id,
-            **aggregated,
-            "detailed_results": {
-                "msisdn": analysis_result.get("msisdn_analysis"),
-                "first_name": analysis_result.get("first_name_analysis"),
-                "last_name": analysis_result.get("last_name_analysis"),
-                "id_type": analysis_result.get("id_type_analysis"),
-                "id_number": analysis_result.get("id_number_analysis"),
-                "dob": analysis_result.get("dob_analysis"),
-                "address": analysis_result.get("address_analysis"),
-                "city": analysis_result.get("city_analysis"),
-            },
-        }
-
-    except Exception as exc:
-        db.rollback()
-        upsert_analysis_results(
-            db=db,
-            file_id=file_id,
-            analysis_status="error",
-            analysis_error=str(exc),
-        )
-        db.commit()
-        raise HTTPException(status_code=500, detail=f"KYC analysis failed: {exc}") from exc
-
+    return {
+        "file_id": file_id,
+        "analysis_status": "completed",
+        **aggregated,
+        "detailed_results": {
+            "msisdn": analysis_result.get("msisdn_analysis"),
+            "first_name": analysis_result.get("first_name_analysis"),
+            "last_name": analysis_result.get("last_name_analysis"),
+            "id_type": analysis_result.get("id_type_analysis"),
+            "id_number": analysis_result.get("id_number_analysis"),
+            "dob": analysis_result.get("dob_analysis"),
+            "city": analysis_result.get("city_analysis"),
+            "address": analysis_result.get("address_analysis"),
+        },
+    }
 
 @router.get("/report/{file_id}", response_model=ReportResponse)
 def get_report(

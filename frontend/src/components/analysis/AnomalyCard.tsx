@@ -24,7 +24,7 @@ function humanizeAnomalyType(type: string): string {
 }
 
 export function AnomalyCard({ field, type, count, percentage, severity }: AnomalyCardProps) {
-  const config = SEVERITY_CONFIG[severity];
+  const config = SEVERITY_CONFIG[severity] ?? SEVERITY_CONFIG.info;
   const Icon = config.icon;
 
   return (

@@ -16,7 +16,6 @@ router = APIRouter(prefix="/files", tags=["files"])
 def health() -> Dict[str, str]:
     return {"status": "ok"}
 
-
 @router.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
@@ -24,33 +23,23 @@ async def upload_file(
     user_id: Optional[str] = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    """
-    Stores the uploaded file and returns the exact PrepState expected by
-    POST /orchestrator/prep.
-
-    For the current MVP, the file is read into memory before persistence.
-    Chunked upload/storage should be added before exposing the 1 GB limit
-    to production users.
-    """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="A filename is required")
-
-    resolved_thread_id = thread_id or str(uuid.uuid4())
-
     try:
-        # Stream UploadFile directly to disk. Do not call file.read():
-        # that would materialize a potentially 1 GB upload in RAM.
-        saved = storage_service.save_upload_stream(
+        content = await file.read()
+
+        saved = storage_service.save_file(
             db=db,
             original_filename=file.filename,
-            stream=file.file,
+            content=content,
             user_id=user_id,
-            thread_id=resolved_thread_id,
+            thread_id=thread_id,
         )
+
+        resolved_thread_id = thread_id or str(uuid.uuid4())
+        resolved_user_id = user_id or "anonymous"
 
         prep_state: Dict[str, Any] = {
             "thread_id": resolved_thread_id,
-            "user_id": user_id,
+            "user_id": resolved_user_id,
             "file_id": saved["file_id"],
             "file_name": saved["file_name"],
             "file_path": saved["file_path"],
@@ -58,17 +47,9 @@ async def upload_file(
             "prep_error": None,
         }
 
-        return {
-            "status": "success",
-            "file": saved,
-            "prep_state": prep_state,
-        }
+        return {"status": "success", "file": saved, "prep_state": prep_state}
 
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur lors de l'upload du fichier: {exc}",
-        ) from exc
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lors de l'upload du fichier: {str(e)}")

@@ -1,3 +1,20 @@
+import { Severity } from '@/src/types/analysis';
+
+// Le backend renvoie des sévérités "low"/"medium"/"high" (voir
+// data_analysis_nodes.py). Le frontend affiche "info"/"warning"/"error".
+// Ce mapping doit rester identique à SEVERITY_MAP dans
+// backend/src/services/report_service.py pour que /analyze et /report
+// affichent la même chose.
+const BACKEND_SEVERITY_MAP: Record<string, Severity> = {
+  low: 'info',
+  medium: 'warning',
+  high: 'error',
+};
+
+export function normalizeSeverity(raw: string): Severity {
+  return BACKEND_SEVERITY_MAP[raw] ?? 'info';
+}
+
 export const KYC_FIELD_LABELS: Record<string, string> = {
   msisdn: 'MSISDN',
   first_name: 'Prénom',
