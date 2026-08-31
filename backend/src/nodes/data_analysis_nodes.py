@@ -54,9 +54,14 @@ class ChunkedColumn:
     def _relation(self) -> str:
         path = str(self.file_path).replace("'", "''")
         delim = str(self.delimiter).replace("'", "''")
+        # all_varchar=True est essentiel : sans lui, DuckDB détecte
+        # automatiquement les colonnes qui ressemblent à des dates/nombres
+        # (ex: dob au format ISO) et les caste en TIMESTAMP en interne,
+        # ce qui reformate silencieusement la valeur avant même le CAST
+        # explicite en VARCHAR — cassant toute détection de format côté Python.
         return (
             f"read_csv_auto({_sql_literal(path)}, delim={_sql_literal(delim)}, "
-            f"header=True, ignore_errors=True)"
+            f"header=True, all_varchar=True, ignore_errors=True)"
         )
 
     def _conditions(self) -> list[str]:
@@ -1896,7 +1901,8 @@ def analyze_dob(state: AnalysisAgentState) -> AnalysisAgentState:
         # ====================================================================
         
         if non_null_count > 0:
-            compliance_rate = (valid_count / non_null_count) * 100
+            #The compliante rate should be calculated based on the valid_count and the total number of active records, excluding the anomalies.
+            compliance_rate = (valid_count / active_rows_count) * 100
         else:
             compliance_rate = 0.0
         
