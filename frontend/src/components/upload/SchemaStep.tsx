@@ -174,6 +174,11 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
                     </option>
                   ))}
                 </select>
+                {schema.columnReasoning?.[key] && (
+                  <p className="text-xs text-gray-500 mt-1 italic">
+                    {schema.columnReasoning[key]}
+                  </p>
+                )}
               </div>
             ))}
           </div>

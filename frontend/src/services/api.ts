@@ -33,6 +33,25 @@ function normalizeAnomaliesByField(
   return result;
 }
 
+function normalizeDetailedResults(
+  raw: Record<string, any>
+): Record<string, import('../types/analysis').FieldAnalysisResult> {
+  const result: Record<string, import('../types/analysis').FieldAnalysisResult> = {};
+  for (const [field, data] of Object.entries(raw || {})) {
+    if (!data) continue;
+    result[field] = {
+      ...data,
+      status: data.status,
+      complianceRate: data.compliance_rate,
+      riskScore: data.risk_score,
+      rowCount: data.row_count,
+      nullCount: data.null_count,
+      validCount: data.valid_count,
+    };
+  }
+  return result;
+}
+
 async function handleResponse<T>(response: Response, context: string): Promise<T> {
   if (!response.ok) {
     const errorText = await response.text();
@@ -180,6 +199,7 @@ export class ApiService {
         allDetectedColumns: ['Nom', 'Prénom', 'MSISDN', 'ID Type', 'ID Number', 'DOB', 'Address', 'City', 'Status'],
         mappingStatus: 'pending_user_input',
         selectedColumns: {},
+        columnReasoning: {},
       };
     }
 
@@ -190,8 +210,7 @@ export class ApiService {
 
     const data = await handleResponse<Record<string, any>>(response, 'la détection du schéma');
 
-    const selectedColumns: KYCColumnMapping = data.is_orange_money
-      ? {
+        const selectedColumns: KYCColumnMapping = {
           nomColumn: data.nom_column,
           prenomColumn: data.prenom_column,
           msisdnColumn: data.msisdn_column,
@@ -201,8 +220,20 @@ export class ApiService {
           addressColumn: data.address_column,
           cityColumn: data.city_column,
           statusColumn: data.status_column,
-        }
-      : {};
+    };
+
+        const rawReasoning = data.column_suggestion_reasoning || {};
+        const columnReasoning: SchemaDetection['columnReasoning'] = {
+            nomColumn: rawReasoning.nom_column,
+            prenomColumn: rawReasoning.prenom_column,
+            msisdnColumn: rawReasoning.msisdn_column,
+            idTypeColumn: rawReasoning.id_type_column,
+            idNumberColumn: rawReasoning.id_number_column,
+            dobColumn: rawReasoning.dob_column,
+            addressColumn: rawReasoning.address_column,
+            cityColumn: rawReasoning.city_column,
+            statusColumn: rawReasoning.status_column,
+    };
 
     return {
       fileId,
@@ -213,6 +244,7 @@ export class ApiService {
       allDetectedColumns: data.all_detected_columns || [],
       mappingStatus: data.mapping_status || 'error',
       selectedColumns,
+      columnReasoning,
     };
   }
 
@@ -389,7 +421,7 @@ export class ApiService {
         criticalIssues: data.executive_summary?.critical_issues ?? 0,
         recommendation: data.executive_summary?.recommendation ?? '',
       },
-      detailedResults: data.detailed_results ?? {},
+      detailedResults: normalizeDetailedResults(data.detailed_results ?? {}),
     };
   }
 

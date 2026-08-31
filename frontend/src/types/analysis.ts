@@ -64,6 +64,7 @@ export interface SchemaDetection {
   mappingStatus: 'auto_detected' | 'pending_user_input' | 'validated' | 'error';
   // Pré-rempli uniquement si Orange Money détecté
   selectedColumns: KYCColumnMapping;
+  columnReasoning: Partial<Record<keyof KYCColumnMapping, string>>; // NOUVEAU
 }
 
 export interface KYCColumnMapping {

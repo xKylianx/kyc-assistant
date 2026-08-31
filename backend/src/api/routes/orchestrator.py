@@ -91,13 +91,18 @@ def schema_detect(
     file_id: str,
     db: Session = Depends(get_db),
 ):
+    """
+    Détecte le schéma du fichier uploadé.
+    Vérifie si c'est Orange Money ou mappe les colonnes KYC.
+    """
+    
     uploaded_file = db.query(UploadedFile).filter(
         UploadedFile.file_id == file_id
     ).first()
-
+    
     if not uploaded_file:
         raise HTTPException(status_code=404, detail=f"File {file_id} not found")
-
+    
     detection_result = detect_schema(
         db=db,
         file_id=file_id,
@@ -106,7 +111,7 @@ def schema_detect(
     )
 
     # Si pas Orange Money, propose un mapping via LLM plutôt que de laisser
-    # l'utilisateur repartir de zéro sur des selects vides.
+    # l'utilisateur repartir de zéro avec des selects vides.
     if not detection_result.get("is_orange_money", False):
         from src.services.column_suggestion_service import suggest_column_mapping
 
@@ -115,7 +120,8 @@ def schema_detect(
             delimiter=uploaded_file.detected_delimiter or ",",
             available_columns=detection_result.get("all_detected_columns", []),
         )
-        detection_result.update(suggested)
+        detection_result.update(suggested["columns"])
+        detection_result["column_suggestion_reasoning"] = suggested["reasoning"]
 
     upsert_schema_mapping(
         db=db,
@@ -136,9 +142,8 @@ def schema_detect(
         all_detected_columns=str(detection_result.get("all_detected_columns")),
     )
     db.commit()
-
+    
     return detection_result
-
 @router.post("/validate-schema")
 def validate_schema(
     file_id: str,
