@@ -29,7 +29,8 @@ class StorageService:
         return ext
 
     def _validate_size(self, size_bytes: int) -> None:
-        max_bytes = MAX_FILE_SIZE_MB * 1024 * 1024
+        #MAX size = 2GO
+        max_bytes = MAX_FILE_SIZE_MB * 1024 * 1024 * 2
         if size_bytes > max_bytes:
             raise ValueError(
                 f"Fichier trop volumineux (> {MAX_FILE_SIZE_MB} MB)."

@@ -144,6 +144,7 @@ def schema_detect(
     db.commit()
     
     return detection_result
+
 @router.post("/validate-schema")
 def validate_schema(
     file_id: str,
@@ -198,7 +199,6 @@ def validate_schema(
         "is_orange_money": bool(existing.is_orange_money),
     }
 
-
 @router.post("/country-detect")
 def country_detect(
     file_id: str,
@@ -244,7 +244,6 @@ def country_detect(
         **detection_result,
     }
 
-
 @router.post("/validate-country")
 def validate_country(
     file_id: str,
@@ -276,7 +275,6 @@ def validate_country(
         "file_id": file_id,
         "country": country,
     }
-
 
 @router.post("/active-lines-detect")
 def active_lines_detect(
@@ -341,7 +339,6 @@ def active_lines_detect(
         "status": "ok",
         **detection_result,
     }
-
 
 @router.post("/validate-active-lines")
 def validate_active_lines(

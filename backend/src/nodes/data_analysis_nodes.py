@@ -1252,29 +1252,23 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
 
 def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
     """
-    Analyse la colonne numéro d'ID avec validation complète par pays et type.
+    Analyse la colonne numéro d'ID.
     
-    Pour Madagascar CNI: 12 chiffres exactement
-    Détecte les anomalies, les doublons, les patterns suspects.
+    Si un type d'ID dominant a été détecté (analyze_id_type), valide contre
+    les règles de ce type précis. Sinon (type absent/non fiable — cas
+    fréquent avec des données de qualité variable), valide chaque numéro
+    contre TOUS les formats connus du pays et considère valide tout numéro
+    qui matche au moins un format.
     
-    Utilise active_rows_count du state pour éviter les recalculs.
     TOUTES LES REQUÊTES S'EXÉCUTENT UNIQUEMENT SUR LES LIGNES ACTIVES.
-    
-    Args:
-        state: AnalysisAgentState avec file_path, schema_mapping, country, detected_id_type, active_rows_count
-        
-    Returns:
-        État mis à jour avec résultats d'analyse numéro d'ID
     """
     
     print("\n" + "=" * 60)
     print("🔢 ANALYZING ID NUMBER")
     print("=" * 60)
-    
-    # ✅ Récupérer active_rows_count depuis state
+
     active_rows_count = state.get("active_rows_count", 0)
     
-    # Récupérer la colonne numéro d'ID
     schema_mapping = state.get("schema_mapping", {})
     id_number_column = schema_mapping.get("id_number_column")
     
@@ -1302,7 +1296,8 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
     try:
         from src.config.id_validation_rules import (
             get_id_validation_rules,
-            validate_id_number
+            validate_id_number,
+            validate_id_number_any_type,
         )
         from collections import Counter
         import re
@@ -1321,21 +1316,14 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
             }
             return state
         
-        # ====================================================================
-        # STEP 1: Charger les données
-        # ====================================================================
-        
         print(f"\n📊 Extracting ID numbers...")
         
         if data:
-            # Données en mémoire
             id_numbers = [
                 str(record.get(id_number_column, "")).strip()
                 for record in data
             ]
         else:
-            # Lire depuis fichier
-            con = duckdb.connect()
             id_numbers = ChunkedColumn(
                 file_path, id_number_column,
                 delimiter=state.get("detected_delimiter") or ",",
@@ -1343,37 +1331,26 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 active_status_values=state.get("active_status_values"),
                 expected_length=active_rows_count,
             )
-            con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
         
-        # ====================================================================
-        # STEP 2: Récupérer les règles de validation
-        # ====================================================================
+        # Détermine le mode de validation : type précis connu, ou fallback
+        # multi-types si le type d'ID est absent/non reconnu pour ce pays.
+        single_type_rules = get_id_validation_rules(country, detected_id_type)
+        use_any_type_mode = not detected_id_type or not single_type_rules or "format" not in single_type_rules
         
-        rules = get_id_validation_rules(country, detected_id_type)
-        
-        if not rules:
-            print(f"⚠️ No validation rules for {country} - {detected_id_type}")
-            state["id_number_analysis"] = {
-                "status": "warning",
-                "row_count": active_rows_count,
-                "warning": f"No validation rules for {country} - {detected_id_type}"
-            }
-            return state
-        
-        print(f"\n📋 Validation Rules:")
-        print(f"   • Format: {rules.get('format')}")
-        print(f"   • Pattern: {rules.get('pattern')}")
-        print(f"   • Length: {rules.get('length', 'Variable')}")
-        
-        # ====================================================================
-        # STEP 3: Analyser les numéros d'ID
-        # ====================================================================
+        if use_any_type_mode:
+            print(f"\n⚠️ ID type absent ou non reconnu — validation multi-types activée")
+            print(f"   Un numéro sera considéré valide s'il correspond à au moins")
+            print(f"   un des formats connus pour {country}.")
+        else:
+            print(f"\n📋 Validation Rules ({detected_id_type}):")
+            print(f"   • Format: {single_type_rules.get('format')}")
+            print(f"   • Pattern: {single_type_rules.get('pattern')}")
+            print(f"   • Length: {single_type_rules.get('length', 'Variable')}")
         
         print(f"\n📊 Analyzing ID numbers...")
         
-        # Compteurs
         null_count = sum(1 for id_num in id_numbers if not id_num or id_num == "")
         non_null_count = active_rows_count - null_count
         
@@ -1390,57 +1367,59 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
             }
             return state
         
-        # ====================================================================
-        # STEP 4: Valider chaque numéro et collecter les erreurs
-        # ====================================================================
-        
         print(f"\n📊 Validating ID numbers...")
         
         valid_count = 0
         invalid_count = 0
         validation_errors = Counter()
+        matched_type_distribution = Counter()  # utile seulement en mode multi-types
         length_distribution = Counter()
         duplicate_ids = Counter()
         
-        # Listes pour analyses supplémentaires
         valid_ids = []
-        invalid_ids = []
         
-        for idx, id_num in enumerate(id_numbers):
+        for id_num in id_numbers:
             if not id_num:
                 continue
             
-            # Valider
-            validation_result = validate_id_number(id_num, country, detected_id_type)
-            
-            if validation_result["valid"]:
-                valid_count += 1
-                valid_ids.append(id_num)
-                duplicate_ids[id_num] += 1
+            if use_any_type_mode:
+                validation_result = validate_id_number_any_type(id_num, country)
+                if validation_result["valid"]:
+                    valid_count += 1
+                    valid_ids.append(id_num)
+                    duplicate_ids[id_num] += 1
+                    matched_type_distribution[validation_result["matched_type"]] += 1
+                else:
+                    invalid_count += 1
+                    validation_errors[validation_result.get("error", "Unknown error")] += 1
             else:
-                invalid_count += 1
-                invalid_ids.append(id_num)
-                error = validation_result.get("error", "Unknown error")
-                validation_errors[error] += 1
+                validation_result = validate_id_number(id_num, country, detected_id_type)
+                if validation_result["valid"]:
+                    valid_count += 1
+                    valid_ids.append(id_num)
+                    duplicate_ids[id_num] += 1
+                else:
+                    invalid_count += 1
+                    error = validation_result.get("error", "Unknown error")
+                    validation_errors[error] += 1
             
-            # Distribution des longueurs
             length_distribution[len(id_num)] += 1
         
         print(f"   ✓ Valid: {valid_count:,}")
         print(f"   ✓ Invalid: {invalid_count:,}")
+        
+        if use_any_type_mode and matched_type_distribution:
+            print(f"\n   Répartition des formats détectés parmi les valides:")
+            for type_key, count in matched_type_distribution.most_common():
+                print(f"   • {type_key}: {count:,}")
         
         if validation_errors:
             print(f"\n   Validation Errors (Top 5):")
             for error, count in validation_errors.most_common(5):
                 print(f"   • {error}: {count:,}")
         
-        # ====================================================================
-        # STEP 5: Détecter les doublons
-        # ====================================================================
-        
         print(f"\n📊 Detecting duplicates...")
         
-        # Compter les doublons (IDs qui apparaissent plus d'une fois)
         duplicate_count = sum(1 for id_num, count in duplicate_ids.items() if count > 1)
         duplicate_records_count = sum(count - 1 for count in duplicate_ids.values() if count > 1)
         
@@ -1448,7 +1427,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         print(f"   ✓ Duplicate IDs: {duplicate_count:,}")
         print(f"   ✓ Duplicate records: {duplicate_records_count:,}")
         
-        # Top doublons
         top_duplicates = duplicate_ids.most_common(5)
         if top_duplicates:
             print(f"\n   Top Duplicates:")
@@ -1456,39 +1434,29 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 if count > 1:
                     print(f"   • {id_num}: {count} occurrences")
         
-        # ====================================================================
-        # STEP 6: Analyser la distribution des longueurs
-        # ====================================================================
-        
         print(f"\n📊 Length Distribution:")
         for length, count in sorted(length_distribution.items()):
             percentage = (count / non_null_count) * 100
             print(f"   • {length} chars: {count:,} ({percentage:.2f}%)")
         
         most_common_length = length_distribution.most_common(1)[0][0] if length_distribution else 0
-        expected_length = rules.get("length")
-        
-        # ====================================================================
-        # STEP 7: Détecter les patterns suspects
-        # ====================================================================
+        expected_length = None if use_any_type_mode else single_type_rules.get("length")
         
         print(f"\n📊 Detecting suspicious patterns...")
         
         suspicious_patterns = {
-            "sequential": 0,  # 123456789012
-            "repeated": 0,    # 111111111111
-            "all_zeros": 0,   # 000000000000
-            "all_nines": 0,   # 999999999999
+            "sequential": 0,
+            "repeated": 0,
+            "all_zeros": 0,
+            "all_nines": 0,
         }
         
         for id_num in valid_ids:
-            # Pattern séquentiel
             if re.match(r'^[0-9]{2,}$', id_num):
                 digits = [int(d) for d in id_num]
                 if all(digits[i] == digits[i-1] + 1 for i in range(1, len(digits))):
                     suspicious_patterns["sequential"] += 1
             
-            # Chiffres répétés
             if len(set(id_num)) == 1:
                 if id_num[0] == '0':
                     suspicious_patterns["all_zeros"] += 1
@@ -1502,16 +1470,11 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         print(f"   ✓ All zeros: {suspicious_patterns['all_zeros']:,}")
         print(f"   ✓ All nines: {suspicious_patterns['all_nines']:,}")
         
-        # ====================================================================
-        # STEP 8: Calculer la conformité
-        # ====================================================================
-        
         if non_null_count > 0:
             compliance_rate = (valid_count / non_null_count) * 100
         else:
             compliance_rate = 0.0
         
-        # Déterminer le statut
         if compliance_rate >= 95:
             compliance_status = "excellent"
             risk_score = 0.1
@@ -1524,10 +1487,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             compliance_status = "poor"
             risk_score = 0.7
-        
-        # ====================================================================
-        # STEP 9: Détecter les anomalies
-        # ====================================================================
         
         anomalies = []
         
@@ -1570,7 +1529,7 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
             })
         
         suspicious_total = sum(suspicious_patterns.values())
-        if suspicious_total > (valid_count * 0.05):
+        if valid_count > 0 and suspicious_total > (valid_count * 0.05):
             anomalies.append({
                 "type": "suspicious_patterns",
                 "count": suspicious_total,
@@ -1579,40 +1538,47 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "details": suspicious_patterns
             })
         
-        # ====================================================================
-        # STEP 10: Construire le résultat
-        # ====================================================================
+        if use_any_type_mode:
+            anomalies.append({
+                "type": "id_type_undetected",
+                "count": null_count if detected_id_type is None else 0,
+                "percentage": 0,
+                "severity": "low",
+                "note": (
+                    "Le type d'ID n'a pas pu être déterminé de façon fiable "
+                    "(colonne vide ou incohérente). Les numéros ont été "
+                    "validés contre tous les formats connus du pays."
+                )
+            })
         
         analysis_result = {
             "status": "completed",
             "country": country,
             "id_type": detected_id_type,
+            "validation_mode": "any_type" if use_any_type_mode else "single_type",
             "column_analyzed": id_number_column,
             
-            # Comptages
             "row_count": active_rows_count,
             "null_count": null_count,
             "non_null_count": non_null_count,
             "valid_count": valid_count,
             "invalid_count": invalid_count,
             
-            # Conformité
             "compliance_rate": round(compliance_rate, 2),
             "compliance_status": compliance_status,
             "risk_score": risk_score,
             
-            # Format
             "format_details": {
-                "expected_format": rules.get("format"),
+                "expected_format": None if use_any_type_mode else single_type_rules.get("format"),
                 "expected_length": expected_length,
                 "most_common_length": most_common_length,
-                "pattern": rules.get("pattern"),
+                "pattern": None if use_any_type_mode else single_type_rules.get("pattern"),
             },
             
-            # Distribution des longueurs
+            "matched_type_distribution": dict(matched_type_distribution) if use_any_type_mode else None,
+            
             "length_distribution": dict(length_distribution),
             
-            # Doublons
             "duplicates": {
                 "unique_valid_ids": len(set(valid_ids)),
                 "duplicate_ids_count": duplicate_count,
@@ -1621,13 +1587,9 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "top_duplicates": dict(top_duplicates[:5])
             },
             
-            # Patterns suspects
             "suspicious_patterns": suspicious_patterns,
-            
-            # Erreurs de validation
             "validation_errors": dict(validation_errors.most_common(10)),
             
-            # Contrôles
             "controls": {
                 "Null Values": null_count,
                 "Invalid Format": invalid_count,
@@ -1635,7 +1597,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "Suspicious Patterns": suspicious_total,
             },
             
-            # Résumé
             "summary": {
                 "total_records": active_rows_count,
                 "records_with_data": non_null_count,
@@ -1644,13 +1605,13 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "data_quality_score": round(compliance_rate, 2),
             },
             
-            # Anomalies
             "anomalies": anomalies,
         }
         
         state["id_number_analysis"] = analysis_result
         
         print(f"\n✅ ID Number Analysis Complete")
+        print(f"   Mode: {'Multi-types' if use_any_type_mode else detected_id_type}")
         print(f"   Compliance: {compliance_rate:.2f}%")
         print(f"   Status: {compliance_status.upper()}")
         print(f"   Risk Score: {risk_score}")
@@ -1673,7 +1634,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         
         print("=" * 60)
         return state
-
 def analyze_dob(state: AnalysisAgentState) -> AnalysisAgentState:
     """
     Analyse la colonne date de naissance pour validité et problèmes courants.

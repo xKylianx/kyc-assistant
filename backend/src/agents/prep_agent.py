@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 import csv
 import duckdb
 import pandas as pd
+import json
 
 
 class PrepAgent:
@@ -80,17 +81,15 @@ class PrepAgent:
         con = duckdb.connect(database=":memory:")
         try:
             sniff = con.execute(
-                f"SELECT * FROM sniff_csv('{p}', sample_size=20000)"
+                f"SELECT * FROM sniff_csv('{p}', sample_size=20000, ignore_errors=true)"
             ).fetchdf().to_dict(orient="records")[0]
 
-            # clés possibles selon versions DuckDB
             delim = sniff.get("Delimiter") or sniff.get("delim")
             if delim:
                 return str(delim)
             return None
 
         except Exception:
-            # fallback Python csv.Sniffer
             try:
                 with open(path, "r", encoding="utf-8", newline="") as f:
                     sample = f.read(8192)
@@ -100,7 +99,6 @@ class PrepAgent:
                 return None
         finally:
             con.close()
-
     # -------------------------------------------------
     # Profiling pandas
     # -------------------------------------------------
@@ -128,7 +126,8 @@ class PrepAgent:
             str(col): (float(df[col].isna().mean()) if row_count > 0 else 0.0)
             for col in df.columns
         }
-        sample_rows = df.head(5).where(pd.notna(df), None).to_dict(orient="records")
+        sample_df = df.head(5).where(pd.notna(df.head(5)), None)
+        sample_rows = json.loads(sample_df.to_json(orient="records"))
 
         return {
             "row_count": row_count,
@@ -153,7 +152,11 @@ class PrepAgent:
             dtypes = {r[0]: r[1] for r in schema_rows}
 
             sample_df = con.execute("SELECT * FROM relation LIMIT 5").fetchdf()
-            sample_rows = sample_df.where(pd.notna(sample_df), None).to_dict(orient="records")
+            sample_df = sample_df.where(pd.notna(sample_df), None)
+            # Force la conversion en types Python natifs (numpy.int64/float64
+            # ne sont pas sérialisables tels quels par Pydantic v2 et
+            # provoquent un crash silencieux côté FastAPI à la réponse).
+            sample_rows = json.loads(sample_df.to_json(orient="records"))
 
             missing_ratio: Dict[str, float] = {}
             if row_count > 0:
@@ -190,9 +193,17 @@ class PrepAgent:
 
         if ext == ".csv":
             d = (delimiter or ",").replace("'", "''")
+            # ignore_errors=True : ignore les lignes qui ne respectent pas le
+            # nombre de colonnes attendu (fréquent sur des exports volumineux
+            # avec des champs mal échappés) plutôt que de faire planter tout
+            # le profiling. null_padding=True : complète avec NULL les lignes
+            # qui ont MOINS de colonnes que prévu.
             con.execute(
                 f"CREATE VIEW relation AS "
-                f"SELECT * FROM read_csv_auto('{p}', HEADER=TRUE, delim='{d}')"
+                f"SELECT * FROM read_csv_auto("
+                f"'{p}', HEADER=TRUE, delim='{d}', "
+                f"ignore_errors=TRUE, null_padding=TRUE"
+                f")"
             )
         elif ext == ".parquet":
             con.execute(f"CREATE VIEW relation AS SELECT * FROM read_parquet('{p}')")
@@ -200,6 +211,5 @@ class PrepAgent:
             con.execute(f"CREATE VIEW relation AS SELECT * FROM read_json_auto('{p}')")
         else:
             raise ValueError(f"Extension non gérée par duckdb: {ext}")
-
 
 prep_agent = PrepAgent()
