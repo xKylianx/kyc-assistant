@@ -51,6 +51,20 @@ def build_report(db: Session, file_id: str) -> Dict[str, Any]:
     critical_count = sum(1 for a in flattened_anomalies if a["severity"] == "error")
     warning_count = sum(1 for a in flattened_anomalies if a["severity"] == "warning")
     info_count = sum(1 for a in flattened_anomalies if a["severity"] == "info")
+
+    # Total brut d'occurrences d'anomalies (une ligne peut être comptée
+    # plusieurs fois si elle cumule des problèmes sur plusieurs champs).
+    total_anomaly_occurrences = sum(a["count"] for a in flattened_anomalies)
+
+    # Estimation basse du nombre de lignes distinctes réellement affectées :
+    # le maximum des counts par champ donne un plancher plausible, sans
+    # sur-compter les recoupements entre champs (qu'on ne peut pas calculer
+    # sans croiser les identifiants de lignes, non disponibles à ce niveau).
+    max_single_field_count = max((a["count"] for a in flattened_anomalies), default=0)
+
+    critical_count = sum(1 for a in flattened_anomalies if a["severity"] == "error")
+    warning_count = sum(1 for a in flattened_anomalies if a["severity"] == "warning")
+    info_count = sum(1 for a in flattened_anomalies if a["severity"] == "info")
     # Approximation : pas de granularité "ligne" côté backend actuellement,
     # on additionne les enregistrements concernés par chaque anomalie détectée.
     affected_rows = sum(a["count"] for a in flattened_anomalies)
@@ -73,6 +87,8 @@ def build_report(db: Session, file_id: str) -> Dict[str, Any]:
             "info_anomalies": info_count,
             "affected_rows": affected_rows,
             "compliance_score": analysis.overall_compliance_rate,
+            "total_anomaly_occurrences": total_anomaly_occurrences,
+            "affected_rows": max_single_field_count,
         },
         "field_results": {
             "msisdn": analysis.msisdn_analysis,

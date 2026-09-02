@@ -13,6 +13,7 @@ export default function AnalysisDetailPage() {
   const router = useRouter();
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
     if (!params.analysisId) return;
@@ -20,6 +21,26 @@ export default function AnalysisDetailPage() {
       .then(setReport)
       .catch((err) => setError(err instanceof Error ? err.message : 'Impossible de charger le rapport'));
   }, [params.analysisId]);
+
+  const handleExportPdf = async () => {
+    if (!params.analysisId) return;
+    setIsExporting(true);
+    try {
+      const blob = await ApiService.exportReportPdf(params.analysisId);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `kyc-report-${params.analysisId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur lors de l'export PDF");
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <Layout>
@@ -34,7 +55,14 @@ export default function AnalysisDetailPage() {
             <CardContent className="py-12 text-center text-gray-600">Chargement du rapport...</CardContent>
           </Card>
         )}
-        {report && <ReportStep report={report} onReset={() => router.push('/dashboard')} />}
+        {report && (
+          <ReportStep
+            report={report}
+            onReset={() => router.push('/dashboard')}
+            onExportPdf={handleExportPdf}
+            isExporting={isExporting}
+          />
+        )}
       </div>
     </Layout>
   );

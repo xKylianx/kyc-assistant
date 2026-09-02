@@ -218,6 +218,7 @@ export interface AnalysisReport {
     criticalAnomalies: number;
     warningAnomalies: number;
     infoAnomalies: number;
+    totalAnomalyOccurrences: number;
     affectedRows: number;
     complianceScore: number;
   };

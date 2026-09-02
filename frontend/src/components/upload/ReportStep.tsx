@@ -23,6 +23,8 @@ const RECOMMENDATION_STYLES: Record<string, string> = {
 };
 
 export function ReportStep({ report, onReset, onExportPdf, isExporting }: ReportStepProps) {
+  console.log('DEBUG fieldResults:', report.fieldResults);
+  console.log('DEBUG fieldResults keys:', Object.keys(report.fieldResults || {}));
   const recommendationStyle =
     RECOMMENDATION_STYLES[report.overallRiskLevel] || 'bg-gray-50 text-gray-800';
 
@@ -68,7 +70,7 @@ export function ReportStep({ report, onReset, onExportPdf, isExporting }: Report
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-gray-600 mb-1">Enregistrements affectés</p>
+            <p className="text-sm text-gray-600 mb-1">Enregistrements affectés (estimation)</p>
             <p className="text-2xl font-semibold text-gray-900">
               {report.summary.affectedRows.toLocaleString('fr-FR')}
             </p>
