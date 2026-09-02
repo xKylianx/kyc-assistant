@@ -79,24 +79,24 @@ ID_VALIDATION_RULES = {
         }
     },
     
-    "Seychelles": {
-        "NIC": {
-            "name": "National Identity Card",
-            "format": "Variable",
-            "pattern": r"^[A-Z0-9]{6,20}$",
-            "length": None,
-            "min_length": 6,
-            "max_length": 20,
-            "allowed_characters": "A-Z, 0-9",
-            "description": "Numéro de NIC Seychelles",
-            "examples": [],
+    "Botswana": {
+        "CNI": {
+            "name": "Carte Nationale d'Identité",
+            "format": "9 digits",
+            "pattern": r"^\d{9}$",
+            "length": 9,
+            "min_length": 9,
+            "max_length": 9,
+            "allowed_characters": "0-9",
+            "description": "Numéro de CNI Botswana - 9 chiffres",
+            "examples": ["123456789", "987654321"],
             "validation_rules": {
-                "numeric_only": False,
-                "exact_length": None,
-                "checksum": None,
+                "numeric_only": True,
+                "exact_length": 9,
+                "checksum": None,  # À implémenter si besoin
             }
         }
-    },
+    }
 }
 
 

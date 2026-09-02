@@ -278,7 +278,7 @@ def analyze_msisdn(state: AnalysisAgentState) -> AnalysisAgentState:
         # ====================================================================
         
         if non_null_count > 0:
-            compliance_rate = (valid_count / non_null_count) * 100
+            compliance_rate = (valid_count / active_rows_count) * 100
         else:
             compliance_rate = 0.0
         
@@ -1105,7 +1105,7 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
         # ====================================================================
         
         if non_null_count > 0:
-            compliance_rate = (valid_type_count / non_null_count) * 100
+            compliance_rate = (valid_type_count / active_rows_count) * 100
         else:
             compliance_rate = 0.0
         
@@ -1470,8 +1470,8 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         print(f"   ✓ All zeros: {suspicious_patterns['all_zeros']:,}")
         print(f"   ✓ All nines: {suspicious_patterns['all_nines']:,}")
         
-        if non_null_count > 0:
-            compliance_rate = (valid_count / non_null_count) * 100
+        if active_rows_count > 0:
+            compliance_rate = (valid_count / active_rows_count) * 100
         else:
             compliance_rate = 0.0
         
@@ -1498,7 +1498,7 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "severity": "high"
             })
         
-        if invalid_count > (non_null_count * 0.1):
+        if invalid_count > (active_rows_count * 0.1):
             anomalies.append({
                 "type": "invalid_format",
                 "count": invalid_count,

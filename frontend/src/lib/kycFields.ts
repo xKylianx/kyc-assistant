@@ -50,3 +50,40 @@ export function riskBadgeClasses(level: string): string {
       return 'bg-gray-100 text-gray-800';
   }
 }
+
+export const KYC_FIELD_ICONS: Record<string, string> = {
+  msisdn: '📱',
+  first_name: '👤',
+  last_name: '👤',
+  id_type: '🆔',
+  id_number: '🆔',
+  dob: '📅',
+  address: '📍',
+  city: '🏙️',
+};
+
+export const KYC_FIELD_ORDER = [
+  'msisdn',
+  'first_name',
+  'last_name',
+  'id_type',
+  'id_number',
+  'dob',
+  'address',
+  'city',
+];
+
+export function statusLabel(status: string): string {
+  switch (status) {
+    case 'completed':
+      return 'Analysé';
+    case 'warning':
+      return 'Non concluant';
+    case 'skipped':
+      return 'Ignoré';
+    case 'error':
+      return 'Erreur';
+    default:
+      return status;
+  }
+}

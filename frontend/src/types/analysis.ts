@@ -116,10 +116,61 @@ export interface FieldAnalysisResult {
   rowCount?: number;
   nullCount?: number;
   validCount?: number;
+  nonNullCount?: number;
   anomalies?: FieldAnomaly[];
-  [key: string]: unknown; // champs spécifiques par type (formatDetails, ageStatistics, etc.)
+  columnAnalyzed?: string;
+  warning?: string;
+  reason?: string;
+  error?: string;
+  // Champs spécifiques par type d'analyse (présents selon le champ KYC)
+  formatDetails?: {
+    expectedLength?: number | null;
+    expectedFormat?: string | null;
+    pattern?: string | null;
+    matchingLengthCount?: number;
+    matchingLengthPercentage?: number;
+    numericCount?: number;
+    numericPercentage?: number;
+  };
+  idTypeDistribution?: Record<string, number>;
+  dominantIdType?: string;
+  dominantPercentage?: number;
+  distinctIdTypesCount?: number;
+  validationMode?: 'single_type' | 'any_type';
+  matchedTypeDistribution?: Record<string, number> | null;
+  duplicates?: {
+    uniqueValidIds: number;
+    duplicateIdsCount: number;
+    duplicateRecordsCount: number;
+    duplicatePercentage: number;
+    topDuplicates: Record<string, number>;
+  };
+  suspiciousPatterns?: {
+    sequential: number;
+    repeated: number;
+    allZeros: number;
+    allNines: number;
+  };
+  detectedFormats?: Record<string, number>;
+  ageStatistics?: {
+    minAge: number | null;
+    maxAge: number | null;
+    avgAge: number | null;
+  };
+  ageAnomalies?: {
+    underMinimumAge: number;
+    overMaximumAge: number;
+    futureDates: number;
+  };
+  topCities?: Record<string, number>;
+  uniqueCitiesCount?: number;
+  lengthStatistics?: {
+    minLength: number;
+    maxLength: number;
+    avgLength: number;
+  };
+  [key: string]: unknown;
 }
-
 // Réponse de POST /orchestrator/analyze
 export interface KYCAnalysisResult {
   fileId: string;

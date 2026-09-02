@@ -39,15 +39,99 @@ function normalizeDetailedResults(
   const result: Record<string, import('../types/analysis').FieldAnalysisResult> = {};
   for (const [field, data] of Object.entries(raw || {})) {
     if (!data) continue;
-    result[field] = {
+
+    const normalized: import('../types/analysis').FieldAnalysisResult = {
       ...data,
       status: data.status,
       complianceRate: data.compliance_rate,
       riskScore: data.risk_score,
       rowCount: data.row_count,
       nullCount: data.null_count,
+      nonNullCount: data.non_null_count,
       validCount: data.valid_count,
+      columnAnalyzed: data.column_analyzed,
+      warning: data.warning,
+      reason: data.reason,
+      error: data.error,
     };
+
+    if (data.format_details) {
+      normalized.formatDetails = {
+        expectedLength: data.format_details.expected_length,
+        expectedFormat: data.format_details.expected_format,
+        pattern: data.format_details.pattern,
+        matchingLengthCount: data.format_details.matching_length_count,
+        matchingLengthPercentage: data.format_details.matching_length_percentage,
+        numericCount: data.format_details.numeric_count,
+        numericPercentage: data.format_details.numeric_percentage,
+      };
+    }
+
+    if (data.id_type_distribution) {
+      normalized.idTypeDistribution = data.id_type_distribution;
+      normalized.dominantIdType = data.dominant_id_type;
+      normalized.dominantPercentage = data.dominant_percentage;
+      normalized.distinctIdTypesCount = data.distinct_id_types_count;
+    }
+
+    if (data.validation_mode) {
+      normalized.validationMode = data.validation_mode;
+      normalized.matchedTypeDistribution = data.matched_type_distribution;
+    }
+
+    if (data.duplicates) {
+      normalized.duplicates = {
+        uniqueValidIds: data.duplicates.unique_valid_ids,
+        duplicateIdsCount: data.duplicates.duplicate_ids_count,
+        duplicateRecordsCount: data.duplicates.duplicate_records_count,
+        duplicatePercentage: data.duplicates.duplicate_percentage,
+        topDuplicates: data.duplicates.top_duplicates,
+      };
+    }
+
+    if (data.suspicious_patterns) {
+      normalized.suspiciousPatterns = {
+        sequential: data.suspicious_patterns.sequential,
+        repeated: data.suspicious_patterns.repeated,
+        allZeros: data.suspicious_patterns.all_zeros,
+        allNines: data.suspicious_patterns.all_nines,
+      };
+    }
+
+    if (data.detected_formats) {
+      normalized.detectedFormats = data.detected_formats;
+    }
+
+    if (data.age_statistics) {
+      normalized.ageStatistics = {
+        minAge: data.age_statistics.min_age,
+        maxAge: data.age_statistics.max_age,
+        avgAge: data.age_statistics.avg_age,
+      };
+    }
+
+    if (data.age_anomalies) {
+      normalized.ageAnomalies = {
+        underMinimumAge: data.age_anomalies.under_minimum_age,
+        overMaximumAge: data.age_anomalies.over_maximum_age,
+        futureDates: data.age_anomalies.future_dates,
+      };
+    }
+
+    if (data.top_cities) {
+      normalized.topCities = data.top_cities;
+      normalized.uniqueCitiesCount = data.unique_cities_count;
+    }
+
+    if (data.length_statistics) {
+      normalized.lengthStatistics = {
+        minLength: data.length_statistics.min_length,
+        maxLength: data.length_statistics.max_length,
+        avgLength: data.length_statistics.avg_length,
+      };
+    }
+
+    result[field] = normalized;
   }
   return result;
 }
@@ -498,7 +582,7 @@ export class ApiService {
         affectedRows: data.summary?.affected_rows ?? 0,
         complianceScore: data.summary?.compliance_score ?? 0,
       },
-      fieldResults: data.field_results ?? {},
+      fieldResults: normalizeDetailedResults(data.field_results ?? {}),
       analyzedAt: data.analyzed_at,
     };
   }

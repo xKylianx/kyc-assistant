@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/ca
 import { Button } from '@/src/components/ui/button';
 import { CheckCircle, Download, RotateCcw, AlertTriangle } from 'lucide-react';
 import { riskBadgeClasses } from '@/src/lib/kycFields';
+import { FieldDetailAccordion } from '@/src/components/analysis/FieldDetailAccordion';
+import { KYC_FIELD_ORDER } from '@/src/lib/kycFields';
 
 interface ReportStepProps {
   report: AnalysisReport;
@@ -115,6 +117,26 @@ export function ReportStep({ report, onReset, onExportPdf, isExporting }: Report
                 {report.executiveSummary.criticalIssues}
               </span>
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Détail par champ KYC */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Détail de l'analyse par champ</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            {KYC_FIELD_ORDER
+              .filter((field) => report.fieldResults[field])
+              .map((field) => (
+                <FieldDetailAccordion
+                  key={field}
+                  field={field}
+                  data={report.fieldResults[field]}
+                />
+              ))}
           </div>
         </CardContent>
       </Card>

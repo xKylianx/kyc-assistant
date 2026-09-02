@@ -287,7 +287,12 @@ def active_lines_detect(
         upsert_active_lines_detection,
     )
 
-    uploaded_file = _get_file(db, file_id)
+    uploaded_file = db.query(UploadedFile).filter(
+        UploadedFile.file_id == file_id
+    ).first()
+
+    if not uploaded_file:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found")
 
     schema_mapping = (
         db.query(SchemaMapping)
@@ -304,7 +309,7 @@ def active_lines_detect(
         db=db,
         file_id=file_id,
         file_path=uploaded_file.file_path,
-        is_orange_money=bool(schema_mapping.is_orange_money),
+        is_orange_money=schema_mapping.is_orange_money,
         status_column=schema_mapping.status_column,
         detected_delimiter=uploaded_file.detected_delimiter,
     )
@@ -314,31 +319,25 @@ def active_lines_detect(
         file_id=file_id,
         total_lines_count=detection_result.get("total_lines_count", 0),
         active_lines_count=detection_result.get("active_lines_count", 0),
-        active_lines_percentage=detection_result.get(
-            "active_lines_percentage",
-            0.0,
-        ),
+        active_lines_percentage=detection_result.get("active_lines_percentage", 0.0),
         active_status_column=detection_result.get("active_status_column"),
         active_status_values=detection_result.get("active_status_values"),
-        active_lines_filter_method=detection_result.get(
-            "active_lines_filter_method",
-            "error",
-        ),
-        active_status_reasoning=detection_result.get(
-            "active_status_reasoning"
-        ),
-        detection_status=detection_result.get(
-            "detection_status",
-            "error",
-        ),
+        active_lines_filter_method=detection_result.get("active_lines_filter_method"),
+        active_status_reasoning=detection_result.get("active_status_reasoning"),
+        detection_status=detection_result.get("detection_status", "error"),
         detection_error=detection_result.get("detection_error"),
     )
     db.commit()
 
-    return {
-        "status": "ok",
-        **detection_result,
-    }
+    # Empêche le frontend de continuer silencieusement vers l'analyse avec
+    # des données vides quand la détection a réellement échoué.
+    if detection_result.get("detection_status") == "error":
+        raise HTTPException(
+            status_code=422,
+            detail=f"Active lines detection failed: {detection_result.get('detection_error')}",
+        )
+
+    return detection_result
 
 @router.post("/validate-active-lines")
 def validate_active_lines(
