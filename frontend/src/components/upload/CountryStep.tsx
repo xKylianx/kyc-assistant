@@ -28,18 +28,18 @@ export function CountryStep({
   return (
     <div className="space-y-4">
       {schemaAutoValidated && (
-        <Alert className="border-green-200 bg-green-50">
+        <Alert className="border-brand-green/30 bg-brand-green/5">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2">
-              <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-              <AlertDescription className="text-green-800">
+              <CheckCircle className="w-5 h-5 text-brand-green flex-shrink-0 mt-0.5" />
+              <AlertDescription className="text-black font-semibold">
                 Schéma Orange Money détecté — colonnes KYC mappées automatiquement.
               </AlertDescription>
             </div>
             <button
               onClick={onDismissBanner}
               aria-label="Fermer"
-              className="text-green-700 hover:text-green-900 flex-shrink-0"
+              className="text-brand-green hover:opacity-70 flex-shrink-0"
             >
               <X className="w-4 h-4" />
             </button>
@@ -50,8 +50,8 @@ export function CountryStep({
       <Card>
         <CardContent className="pt-6">
           <div className="flex items-center gap-2 mb-1">
-            <Globe className="w-5 h-5 text-orange-500" />
-            <h3 className="font-semibold text-gray-900">Pays détecté</h3>
+            <Globe className="w-5 h-5 text-orange" />
+            <h3 className="font-semibold text-black">Pays détecté</h3>
           </div>
           <p className="text-sm text-gray-600 mb-5">
             Confirmez le pays avant de lancer les contrôles KYC. Les règles de
@@ -62,7 +62,7 @@ export function CountryStep({
             <>
               <div className="bg-gray-50 rounded-lg p-4 flex items-center justify-between mb-4">
                 <div>
-                  <p className="text-2xl font-semibold text-gray-900">
+                  <p className="text-2xl font-semibold text-black">
                     {countryDetection.detectedCountry}
                   </p>
                   <p className="text-sm text-gray-600 mt-1">
@@ -77,13 +77,13 @@ export function CountryStep({
               {countryDetection.reasoning && (
                 <div className="border-t pt-3 mb-5">
                   <p className="text-sm text-gray-600 mb-1">Raisonnement du modèle</p>
-                  <p className="text-sm text-gray-900">{countryDetection.reasoning}</p>
+                  <p className="text-sm font-semibold text-gray-900">{countryDetection.reasoning}</p>
                 </div>
               )}
 
               <div className="flex gap-3">
                 <Button
-                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+                  className="flex-1 bg-orange hover:bg-orange-600 text-black font-semibold"
                   onClick={() => onConfirm(countryDetection.detectedCountry)}
                   disabled={isLoading}
                 >
@@ -103,12 +103,12 @@ export function CountryStep({
                 type="text"
                 value={correctedCountry}
                 onChange={(e) => setCorrectedCountry(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 mb-4"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange focus:border-orange mb-4"
                 placeholder="Ex : Madagascar"
               />
               <div className="flex gap-3">
                 <Button
-                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+                  className="flex-1 bg-orange hover:bg-orange-600 text-black font-semibold"
                   onClick={() => onConfirm(correctedCountry)}
                   disabled={isLoading || !correctedCountry.trim()}
                 >

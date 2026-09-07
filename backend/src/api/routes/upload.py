@@ -24,12 +24,12 @@ async def upload_file(
     db: Session = Depends(get_db),
 ):
     try:
-        content = await file.read()
-
-        saved = storage_service.save_file(
+        # file.file est un SpooledTemporaryFile : lu par blocs directement,
+        # jamais chargé entièrement en mémoire, quelle que soit la taille.
+        saved = storage_service.save_upload_stream(
             db=db,
             original_filename=file.filename,
-            content=content,
+            stream=file.file,
             user_id=user_id,
             thread_id=thread_id,
         )
@@ -37,7 +37,7 @@ async def upload_file(
         resolved_thread_id = thread_id or str(uuid.uuid4())
         resolved_user_id = user_id or "anonymous"
 
-        prep_state: Dict[str, Any] = {
+        prep_state = {
             "thread_id": resolved_thread_id,
             "user_id": resolved_user_id,
             "file_id": saved["file_id"],

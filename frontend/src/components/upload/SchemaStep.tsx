@@ -57,7 +57,7 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-gray-600 mb-1">Nombre de lignes</p>
-            <p className="text-2xl font-bold text-orange-600">
+            <p className="text-2xl font-bold text-orange">
               {profile?.rowCount != null ? profile.rowCount.toLocaleString('fr-FR') : '—'}
             </p>
           </CardContent>
@@ -66,7 +66,7 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-gray-600 mb-1">Colonnes détectées</p>
-            <p className="text-2xl font-bold text-gray-900">
+            <p className="text-2xl font-bold text-black">
               {schema.allDetectedColumns.length}
             </p>
           </CardContent>
@@ -75,7 +75,7 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-gray-600 mb-1">Délimiteur</p>
-            <p className="font-semibold text-gray-900">
+            <p className="font-semibold text-black">
               {prepResult?.prepMeta?.csvDelimiterUsed === ','
                 ? 'Virgule (,)'
                 : prepResult?.prepMeta?.csvDelimiterUsed || '—'}
@@ -85,13 +85,17 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
       </div>
 
       {/* Détection du schéma */}
-      <Card className={schema.isOrangeMoney ? 'border-green-200 bg-green-50' : 'border-orange-200 bg-orange-50'}>
+      <Card className={schema.isOrangeMoney ? 'border-brand-green/30 bg-brand-green/5' : 'border-orange-100 bg-orange-50'}>
         <CardContent className="pt-6">
           <div className="flex items-start gap-3">
-            <Database className={`w-8 h-8 flex-shrink-0 ${schema.isOrangeMoney ? 'text-green-600' : 'text-orange-600'}`} />
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+              schema.isOrangeMoney ? 'bg-brand-green/15' : 'bg-orange-100'
+            }`}>
+              <Database className={`w-5 h-5 ${schema.isOrangeMoney ? 'text-brand-green' : 'text-orange'}`} />
+            </div>
             <div>
               <p className="text-sm text-gray-600">Schéma détecté</p>
-              <p className={`text-xl font-bold ${schema.isOrangeMoney ? 'text-green-600' : 'text-orange-600'}`}>
+              <p className={`text-xl font-bold ${schema.isOrangeMoney ? 'text-brand-green' : 'text-orange'}`}>
                 {schema.isOrangeMoney ? 'Orange Money' : 'Schéma personnalisé'}
               </p>
               <p className="text-sm text-gray-600 mt-1">
@@ -101,11 +105,11 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
           </div>
 
           {!schema.isOrangeMoney && schema.missingRequiredColumns.length > 0 && (
-            <div className="flex items-start gap-2 mt-4 pt-4 border-t border-orange-200">
-              <AlertTriangle className="w-4 h-4 text-orange-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-gray-700">
-                Colonnes Orange Money manquantes : {schema.missingRequiredColumns.join(', ')}.
-                Mappez manuellement les colonnes KYC ci-dessous.
+            <div className="flex items-start gap-2 mt-4 pt-4 border-t border-orange-100">
+              <AlertTriangle className="w-4 h-4 text-orange flex-shrink-0 mt-0.5" />
+              <p className="text-sm font-semibold text-gray-900">
+                Colonnes Orange Money non identifiées. Identification automatique
+                des colonnes pour l'analyse KYC. Veuillez les valider ou les modifier.
               </p>
             </div>
           )}
@@ -124,7 +128,7 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
                 <thead>
                   <tr className="border-b">
                     {previewColumns.map((col) => (
-                      <th key={col} className="px-4 py-2 text-left font-semibold text-gray-900 whitespace-nowrap">
+                      <th key={col} className="px-4 py-2 text-left font-semibold text-black whitespace-nowrap">
                         {col}
                       </th>
                     ))}
@@ -165,7 +169,7 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
                 <select
                   value={selectedColumns[key] || ''}
                   onChange={(e) => handleColumnChange(key, e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange focus:border-orange"
                 >
                   <option value="">-- Sélectionner --</option>
                   {schema.allDetectedColumns.map((col) => (
@@ -175,7 +179,7 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
                   ))}
                 </select>
                 {schema.columnReasoning?.[key] && (
-                  <p className="text-xs text-gray-500 mt-1 italic">
+                  <p className="text-xs font-semibold text-gray-700 mt-1">
                     {schema.columnReasoning[key]}
                   </p>
                 )}
@@ -193,7 +197,7 @@ export function SchemaStep({ schema, prepResult, onConfirm, isLoading }: SchemaS
         <Button
           onClick={handleConfirm}
           disabled={isLoading || hasEmptyRequiredField}
-          className="bg-orange-500 hover:bg-orange-600 text-white"
+          className="bg-orange hover:bg-orange-600 text-black font-semibold"
         >
           {isLoading ? 'Chargement...' : "Continuer vers l'analyse"}
         </Button>

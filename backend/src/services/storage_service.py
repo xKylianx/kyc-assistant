@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 from datetime import datetime
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from src.db.models.uploaded_file import UploadedFile
 
 ALLOWED_EXTENSIONS = {".csv"}
-MAX_FILE_SIZE_MB = 1000
+MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "20000"))  # 20 Go par défaut
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB
 
 
@@ -27,14 +28,6 @@ class StorageService:
                 f"Extension '{ext}' non supportée. Extensions autorisées: {allowed}"
             )
         return ext
-
-    def _validate_size(self, size_bytes: int) -> None:
-        #MAX size = 2GO
-        max_bytes = MAX_FILE_SIZE_MB * 1024 * 1024 * 2
-        if size_bytes > max_bytes:
-            raise ValueError(
-                f"Fichier trop volumineux (> {MAX_FILE_SIZE_MB} MB)."
-            )
 
     def _new_storage_target(self, original_filename: str) -> tuple[str, str, Path]:
         ext = self._validate_extension(original_filename)
@@ -94,10 +87,9 @@ class StorageService:
         chunk_size: int = UPLOAD_CHUNK_SIZE,
     ) -> Dict[str, Any]:
         """
-        Persist an upload incrementally.
-
-        The complete file is never materialized as a bytes object in RAM.
-        A hard size limit is enforced while writing the stream.
+        Persist an upload incrementally. The complete file is never
+        materialized as a bytes object in RAM. A hard size limit is
+        enforced while writing the stream.
         """
         if not original_filename:
             raise ValueError("Filename is required")
@@ -147,8 +139,7 @@ class StorageService:
         user_id: Optional[str] = None,
         thread_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Backward-compatible API for small in-memory callers."""
-        self._validate_size(len(content))
+        """Backward-compatible API for small in-memory callers only."""
         from io import BytesIO
 
         return self.save_upload_stream(

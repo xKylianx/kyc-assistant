@@ -26,15 +26,16 @@ export function useKYCAnalysis() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Données du flux
   const [fileId, setFileId] = useState<string | null>(null);
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [prepResult, setPrepResult] = useState<PrepResult | null>(null);
   const [schemaDetection, setSchemaDetection] = useState<SchemaDetection | null>(null);
-  const [schemaAutoValidated, setSchemaAutoValidated] = useState<boolean>(false);
+  const [schemaAutoValidated, setSchemaAutoValidated] = useState(false);
   const [countryDetection, setCountryDetection] = useState<CountryDetection | null>(null);
   const [activeLines, setActiveLines] = useState<ActiveLinesDetection | null>(null);
   const [analysisResult, setAnalysisResult] = useState<KYCAnalysisResult | null>(null);
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
   const [report, setReport] = useState<AnalysisReport | null>(null);
 
   const runStep = async <T,>(
@@ -54,19 +55,24 @@ export function useKYCAnalysis() {
       setIsLoading(false);
     }
   };
-  // Étape 1 : Upload
+
+  // Étape 1 : Upload (avec progression, pour les gros fichiers)
   const uploadFile = async (file: File) => {
     return runStep('Upload', async () => {
-      const result = await ApiService.uploadFile(file);
-      setFileId(result.fileId);
-      setUploadResult(result);
-      setCurrentStep('prep');
-      return result;
+      setUploadProgress(0);
+      try {
+        const result = await ApiService.uploadFile(file, setUploadProgress);
+        setFileId(result.fileId);
+        setUploadResult(result);
+        setCurrentStep('prep');
+        return result;
+      } finally {
+        setUploadProgress(null);
+      }
     });
   };
 
-  // Étape 2 : Prep agent — accepte le résultat d'upload en paramètre pour éviter
-  // toute dépendance à un state pas encore re-rendu (voir handleUpload dans page.tsx)
+  // Étape 2 : Prep agent (profiling du fichier — délimiteur, colonnes, échantillon)
   const runPrep = async (upload?: UploadResult) => {
     const uploadData = upload ?? uploadResult;
     if (!uploadData) throw new Error('Aucun fichier uploadé');
@@ -95,10 +101,9 @@ export function useKYCAnalysis() {
     });
   };
 
-  // Permet à l'UI de fermer le bandeau sans affecter le flux d'analyse
   const dismissSchemaBanner = () => setSchemaAutoValidated(false);
 
-  // Étape 3 : Valider le mapping de colonnes KYC (cas non-Orange Money uniquement)
+  // Étape 3 : Valider le mapping de colonnes KYC (cas non-Orange Money)
   const validateSchema = async (columns: KYCColumnMapping) => {
     if (!fileId) throw new Error('Aucun fichier sélectionné');
     return runStep('Validation du schéma', async () => {
@@ -110,7 +115,7 @@ export function useKYCAnalysis() {
     });
   };
 
-  // Étape 4 : Confirmer (ou corriger) le pays détecté
+  // Étape 4 : Confirmer le pays, puis enchaîner lignes actives + analyse
   const validateCountry = async (country: string) => {
     if (!fileId) throw new Error('Aucun fichier sélectionné');
     return runStep('Validation du pays', async () => {
@@ -118,13 +123,22 @@ export function useKYCAnalysis() {
       setCountryDetection((prev) =>
         prev ? { ...prev, detectedCountry: country, status: 'completed' } : prev
       );
-      // Enchaîne sur la détection des lignes actives puis l'analyse
       const lines = await ApiService.detectActiveLines(fileId);
       setActiveLines(lines);
-      const result = await ApiService.analyzeKYC(fileId);
-      setAnalysisResult(result);
-      setCurrentStep('analysis');
-      return result;
+
+      setAnalysisElapsedSeconds(0);
+      const timer = setInterval(() => {
+        setAnalysisElapsedSeconds((s) => s + 1);
+      }, 1000);
+
+      try {
+        const result = await ApiService.analyzeKYC(fileId);
+        setAnalysisResult(result);
+        setCurrentStep('analysis');
+        return result;
+      } finally {
+        clearInterval(timer);
+      }
     });
   };
 
@@ -154,18 +168,18 @@ export function useKYCAnalysis() {
     });
   };
 
-  // Réinitialiser
-    // Réinitialiser
   const reset = () => {
     setCurrentStep('upload');
     setFileId(null);
     setUploadResult(null);
+    setUploadProgress(null);
     setPrepResult(null);
     setSchemaDetection(null);
-    setSchemaAutoValidated(false); // NOUVEAU
+    setSchemaAutoValidated(false);
     setCountryDetection(null);
     setActiveLines(null);
     setAnalysisResult(null);
+    setAnalysisElapsedSeconds(0);
     setReport(null);
     setError(null);
   };
@@ -176,13 +190,15 @@ export function useKYCAnalysis() {
     error,
     fileId,
     uploadResult,
+    uploadProgress,
     prepResult,
     schemaDetection,
-    schemaAutoValidated,   // NOUVEAU
-    dismissSchemaBanner,   // NOUVEAU
+    schemaAutoValidated,
+    dismissSchemaBanner,
     countryDetection,
     activeLines,
     analysisResult,
+    analysisElapsedSeconds,
     report,
     uploadFile,
     runPrep,

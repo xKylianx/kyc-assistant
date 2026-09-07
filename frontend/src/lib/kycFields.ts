@@ -87,3 +87,50 @@ export function statusLabel(status: string): string {
       return status;
   }
 }
+
+export function dobValidationRulesLabel(data: import('../types/analysis').FieldAnalysisResult): string {
+  const under = data.ageAnomalies?.underMinimumAge ?? 0;
+  const over = data.ageAnomalies?.overMaximumAge ?? 0;
+  return `Âge min : 18 ans · Âge max : 95 ans`;
+}
+
+// Interpolation hex linéaire entre deux couleurs
+function interpolateHex(colorA: string, colorB: string, t: number): string {
+  const a = colorA.match(/\w\w/g)!.map((h) => parseInt(h, 16));
+  const b = colorB.match(/\w\w/g)!.map((h) => parseInt(h, 16));
+  const rgb = a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  return `#${rgb.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+// Échelle continue rouge → jaune → vert, calquée sur le principe du POC
+// Streamlit (colormap continu par valeur plutôt que seuils fixes).
+export function complianceScaleColor(rate: number): string {
+  const r = Math.max(0, Math.min(100, rate));
+  if (r <= 50) {
+    return interpolateHex('#E24B4A', '#FFDC00', r / 50);
+  }
+  return interpolateHex('#FFDC00', '#50BE87', (r - 50) / 50);
+}
+
+export function qualityLabel(quality: string): { label: string; emoji: string } {
+  switch (quality) {
+    case 'EXCELLENT':
+      return { label: 'Excellent', emoji: '↑' };
+    case 'GOOD':
+      return { label: 'Good', emoji: '↑' };
+    case 'FAIR':
+      return { label: 'Fair', emoji: '→' };
+    case 'POOR':
+      return { label: 'Poor', emoji: '↓' };
+    default:
+      return { label: quality, emoji: '' };
+  }
+}
+
+// Couleur de texte lisible sur un fond coloré par l'échelle continue
+// (mêmes teintes que les cartes de la maquette validée)
+export function heatmapTextColor(rate: number): string {
+  if (rate < 40) return '#4A1B0C';
+  if (rate < 75) return '#412402';
+  return '#173404';
+}

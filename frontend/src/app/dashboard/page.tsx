@@ -12,6 +12,14 @@ import Link from 'next/link';
 
 const PAGE_SIZE = 10;
 
+function formatDateDDMMYYYY(isoDate: string): string {
+  const date = new Date(isoDate);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
 export default function DashboardPage() {
   const [analyses, setAnalyses] = useState<AnalysisHistoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -135,7 +143,7 @@ export default function DashboardPage() {
           </Card>
         ) : (
           <div className="space-y-2">
-            <div className="grid grid-cols-[1fr_100px_100px_110px_100px] gap-2 px-3 text-xs text-gray-400">
+            <div className="grid grid-cols-[1fr_100px_100px_110px_110px] gap-2 px-3 text-xs text-gray-400">
               <span>Fichier</span>
               <span>Conformité</span>
               <span>Risque</span>
@@ -144,49 +152,48 @@ export default function DashboardPage() {
             </div>
 
             {analyses.map((a) => (
-              <Card key={a.id}>
-                <CardContent className="py-3 px-4">
-                  <div className="grid grid-cols-[1fr_100px_100px_110px_100px] gap-2 items-center">
-                    <span className="text-sm text-gray-900 truncate">
-                      {a.fileName || a.fileId}
-                    </span>
-                    <span
-                      className={`text-sm ${
-                        a.complianceRate != null && a.complianceRate >= 90
-                          ? 'text-green-600'
-                          : a.complianceRate != null && a.complianceRate >= 80
-                          ? 'text-yellow-600'
-                          : 'text-red-600'
-                      }`}
-                    >
-                      {a.complianceRate != null ? `${a.complianceRate}%` : '—'}
-                    </span>
-                    {a.riskLevel ? (
-                      <span
-                        className={`inline-block w-fit px-2 py-0.5 rounded text-xs font-semibold ${riskBadgeClasses(
-                          a.riskLevel
-                        )}`}
-                      >
-                        {a.riskLevel}
+              <Link key={a.id} href={`/dashboard/${a.fileId}`} className="block">
+                <Card className="hover:border-orange-300 hover:shadow-sm transition-all cursor-pointer">
+                  <CardContent className="py-3 px-4">
+                    <div className="grid grid-cols-[1fr_100px_100px_110px_110px] gap-2 items-center">
+                      <span className="text-sm text-gray-900 truncate">
+                        {a.fileName || a.fileId}
                       </span>
-                    ) : (
-                      <span className="text-sm text-gray-400">—</span>
-                    )}
-                    <span className="text-sm text-gray-900">
-                      {a.rowsAnalyzed != null ? a.rowsAnalyzed.toLocaleString('fr-FR') : '—'}
-                    </span>
-                    <span className="text-xs text-gray-600">
-                      {a.createdAt
-                        ? new Date(a.createdAt).toLocaleDateString('fr-FR', {
-                            day: '2-digit',
-                            month: 'short',
-                          })
-                        : '—'}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                      <span
+                        className={`text-sm ${
+                          a.complianceRate != null && a.complianceRate >= 90
+                            ? 'text-green-600'
+                            : a.complianceRate != null && a.complianceRate >= 80
+                            ? 'text-yellow-600'
+                            : 'text-red-600'
+                        }`}
+                      >
+                        {a.complianceRate != null ? `${a.complianceRate}%` : '—'}
+                      </span>
+                      {a.riskLevel ? (
+                        <span
+                          className={`inline-block w-fit px-2 py-0.5 rounded text-xs font-semibold ${riskBadgeClasses(
+                            a.riskLevel
+                          )}`}
+                        >
+                          {a.riskLevel}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-gray-400">—</span>
+                      )}
+                      <span className="text-sm text-gray-900">
+                        {a.rowsAnalyzed != null ? a.rowsAnalyzed.toLocaleString('fr-FR') : '—'}
+                      </span>
+                      <span className="text-xs text-gray-600">
+                        {a.createdAt ? formatDateDDMMYYYY(a.createdAt) : '—'}
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            ))
+            }
+
 
             {trend !== null && (
               <p className="text-sm text-gray-600 mt-4 flex items-center gap-1">

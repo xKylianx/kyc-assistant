@@ -131,6 +131,22 @@ function normalizeDetailedResults(
       };
     }
 
+    if (data.controls) {
+      normalized.controls = data.controls;
+    }
+
+    if (data.length_distribution) {
+      normalized.lengthDistribution = data.length_distribution;
+    }
+
+    if (data.age_distribution) {
+      normalized.ageDistribution = data.age_distribution;
+    }
+
+    if (data.validation_errors) {
+      normalized.validationErrors = data.validation_errors;
+    }
+
     result[field] = normalized;
   }
   return result;
@@ -156,9 +172,13 @@ export class ApiService {
    * Étape 1 : Uploader le fichier
    * POST /files/upload
    */
-  static async uploadFile(file: File): Promise<UploadResult> {
+    static async uploadFile(
+    file: File,
+    onProgress?: (percent: number) => void
+  ): Promise<UploadResult> {
     if (USE_MOCK) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
+      onProgress?.(100);
       const fileId = 'mock-file-id-123';
       return {
         fileId,
@@ -184,37 +204,49 @@ export class ApiService {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetch(`${API_BASE_URL}/files/upload`, {
-      method: 'POST',
-      body: formData,
-    });
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
 
-    const data = await handleResponse<{
-      status: string;
-      file: {
-        file_id: string;
-        file_name: string;
-        stored_file_name: string;
-        file_path: string;
-        size_bytes: number;
-        extension: string;
-        status: string;
-        created_at: string;
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          onProgress(Math.round((event.loaded / event.total) * 100));
+        }
       };
-      prep_state: PrepState;
-    }>(response, "l'upload du fichier");
 
-    return {
-      fileId: data.file.file_id,
-      fileName: data.file.file_name,
-      storedFileName: data.file.stored_file_name,
-      filePath: data.file.file_path,
-      sizeBytes: data.file.size_bytes,
-      extension: data.file.extension.replace('.', ''),
-      status: data.file.status,
-      createdAt: data.file.created_at,
-      prepState: data.prep_state,
-    };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            resolve({
+              fileId: data.file.file_id,
+              fileName: data.file.file_name,
+              storedFileName: data.file.stored_file_name,
+              filePath: data.file.file_path,
+              sizeBytes: data.file.size_bytes,
+              extension: data.file.extension.replace('.', ''),
+              status: data.file.status,
+              createdAt: data.file.created_at,
+              prepState: data.prep_state,
+            });
+          } catch {
+            reject(new Error('Réponse invalide du serveur lors de l\'upload'));
+          }
+        } else {
+          let message = 'Erreur lors de l\'upload du fichier';
+          try {
+            const parsed = JSON.parse(xhr.responseText);
+            message = parsed.error?.message || parsed.detail || message;
+          } catch {
+            // corps non-JSON, on garde le message par défaut
+          }
+          reject(new Error(message));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Erreur réseau lors de l\'upload'));
+      xhr.open('POST', `${API_BASE_URL}/files/upload`);
+      xhr.send(formData);
+    });
   }
 
   /**

@@ -122,7 +122,7 @@ export interface FieldAnalysisResult {
   warning?: string;
   reason?: string;
   error?: string;
-  // Champs spécifiques par type d'analyse (présents selon le champ KYC)
+  controls?: Record<string, number>; // NOUVEAU — dict brut "Null Values": 123, etc.
   formatDetails?: {
     expectedLength?: number | null;
     expectedFormat?: string | null;
@@ -132,6 +132,7 @@ export interface FieldAnalysisResult {
     numericCount?: number;
     numericPercentage?: number;
   };
+  lengthDistribution?: Record<string, number>; // NOUVEAU
   idTypeDistribution?: Record<string, number>;
   dominantIdType?: string;
   dominantPercentage?: number;
@@ -152,6 +153,7 @@ export interface FieldAnalysisResult {
     allNines: number;
   };
   detectedFormats?: Record<string, number>;
+  ageDistribution?: Record<string, number>; // NOUVEAU
   ageStatistics?: {
     minAge: number | null;
     maxAge: number | null;
@@ -162,6 +164,7 @@ export interface FieldAnalysisResult {
     overMaximumAge: number;
     futureDates: number;
   };
+  validationErrors?: Record<string, number>; // NOUVEAU
   topCities?: Record<string, number>;
   uniqueCitiesCount?: number;
   lengthStatistics?: {
