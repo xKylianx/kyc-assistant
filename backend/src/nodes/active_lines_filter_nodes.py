@@ -9,7 +9,7 @@ load_dotenv()
 
 # Initialize the LLM (adjust based on your setup)
 model = ChatOpenAI(
-     model= "openai/gpt-5-chat",
+     model= os.getenv("LLM_PROXY_MODEL"),  # Adjust based on your config
      api_key=os.getenv("OPENAI_API_KEY"),
      base_url = os.getenv("BASE_URL"),
 )
@@ -219,7 +219,7 @@ def _detect_active_values_with_llm(status_column: str, unique_values: list) -> t
     
     # Initialize LLM
     llm = ChatOpenAI(
-        model="gpt-4o-mini",
+        model=os.getenv("LLM_PROXY_MODEL"),
         temperature=0,
     )
     

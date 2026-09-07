@@ -1,15 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { Upload, AlertCircle } from 'lucide-react';
+import { Upload, AlertCircle, Check } from 'lucide-react';
 import { Card, CardContent } from '@/src/components/ui/card';
 
 interface UploadStepProps {
   onUpload: (file: File) => void;
   isLoading: boolean;
+  progress: number | null;
 }
 
-export function UploadStep({ onUpload, isLoading }: UploadStepProps) {
+export function UploadStep({ onUpload, isLoading, progress }: UploadStepProps) {
   const [isDragActive, setIsDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,40 +24,34 @@ export function UploadStep({ onUpload, isLoading }: UploadStepProps) {
     e.preventDefault();
     e.stopPropagation();
     setIsDragActive(false);
-
     const files = e.dataTransfer.files;
-    if (files && files[0]) {
-      validateAndUpload(files[0]);
-    }
+    if (files && files[0]) validateAndUpload(files[0]);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      validateAndUpload(e.target.files[0]);
-    }
+    if (e.target.files && e.target.files[0]) validateAndUpload(e.target.files[0]);
   };
 
   const validateAndUpload = (file: File) => {
     setError(null);
 
     const validExtensions = ['.csv', '.xlsx', '.xls'];
-    const hasValidExtension = validExtensions.some((ext) =>
-      file.name.toLowerCase().endsWith(ext)
-    );
-
+    const hasValidExtension = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext));
     if (!hasValidExtension) {
       setError('Format non supporté. Utilisez CSV ou Excel (XLSX, XLS).');
       return;
     }
 
-    const maxSize = 1024 * 1024 * 1024; // 1 GB
+    const maxSize = 20 * 1024 * 1024 * 1024; // 20 GB
     if (file.size > maxSize) {
-      setError('Fichier trop volumineux. Limite : 1 GB');
+      setError('Fichier trop volumineux. Limite : 20 GB');
       return;
     }
 
     onUpload(file);
   };
+
+  const isUploading = progress !== null;
 
   return (
     <div className="space-y-6">
@@ -65,48 +60,64 @@ export function UploadStep({ onUpload, isLoading }: UploadStepProps) {
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
-        className={`border-2 border-dashed transition-colors cursor-pointer ${
-          isDragActive
-            ? 'border-orange-500 bg-orange-50'
-            : 'border-gray-300 bg-gray-50 hover:border-orange-400'
-        }`}
+        className={`border-2 border-dashed transition-colors ${
+          isDragActive ? 'border-orange bg-orange-50' : 'border-gray-300 bg-gray-50 hover:border-orange'
+        } ${isUploading ? '' : 'cursor-pointer'}`}
       >
         <CardContent className="pt-12 pb-12">
-          <label className="flex flex-col items-center justify-center cursor-pointer">
-            <Upload className="w-12 h-12 text-orange-500 mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
-              Téléchargez votre fichier
-            </h3>
-            <p className="text-sm text-gray-600 mb-6">
-              Glissez-déposez ou cliquez pour sélectionner
-            </p>
-
-            <div className="bg-white rounded-lg p-4 mb-6 w-full max-w-sm">
-              <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
-                <span>✓ CSV</span>
-                <span>✓ Excel (XLSX, XLS)</span>
+          {isUploading ? (
+            <div className="flex flex-col items-center justify-center">
+              <div className="w-16 h-16 rounded-full bg-orange-50 flex items-center justify-center mb-4">
+                <Upload className="w-7 h-7 text-orange animate-pulse" />
               </div>
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <span>✓ Jusqu'à 1 GB</span>
+              <h3 className="text-lg font-semibold text-black mb-2">Envoi en cours...</h3>
+              <p className="text-sm text-gray-600 mb-6">Ne fermez pas cette page</p>
+              <div className="w-full max-w-sm">
+                <div className="h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-orange transition-all duration-300"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                <p className="text-sm font-bold text-black text-center mt-2">{progress}%</p>
               </div>
             </div>
+          ) : (
+            <label className="flex flex-col items-center justify-center cursor-pointer">
+              <div className="w-16 h-16 rounded-full bg-orange-50 flex items-center justify-center mb-4">
+                <Upload className="w-7 h-7 text-orange" />
+              </div>
+              <h3 className="text-lg font-semibold text-black mb-2">Téléchargez votre fichier</h3>
+              <p className="text-sm text-gray-600 mb-6">Glissez-déposez ou cliquez pour sélectionner</p>
 
-            <input
-              type="file"
-              onChange={handleChange}
-              accept=".csv,.xlsx,.xls"
-              className="hidden"
-              disabled={isLoading}
-            />
+              <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6 w-full max-w-sm">
+                <div className="flex items-center gap-2 text-sm text-gray-700 mb-2">
+                  <Check className="w-4 h-4 text-orange flex-shrink-0" />
+                  <span>CSV, Excel (XLSX, XLS)</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-gray-700">
+                  <Check className="w-4 h-4 text-orange flex-shrink-0" />
+                  <span>Jusqu'à 20 GB</span>
+                </div>
+              </div>
 
-            <button
-              type="button"
-              className="px-6 py-2 bg-orange-500 text-white rounded-lg font-medium hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={isLoading}
-            >
-              {isLoading ? 'Chargement...' : 'Sélectionner un fichier'}
-            </button>
-          </label>
+              <input
+                type="file"
+                onChange={handleChange}
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
+                disabled={isLoading}
+              />
+
+              <button
+                type="button"
+                className="px-6 py-2.5 bg-orange text-black rounded-md font-semibold hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isLoading}
+              >
+                Sélectionner un fichier
+              </button>
+            </label>
+          )}
         </CardContent>
       </Card>
 

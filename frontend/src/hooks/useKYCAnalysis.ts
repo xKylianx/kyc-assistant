@@ -2,226 +2,184 @@
 
 import { useState } from 'react';
 import { ApiService } from '../services/api';
-import { FileInfo, SchemaDetection, KYCAnalysisResult, AnalysisReport } from '../types/analysis';
+import {
+  UploadResult,
+  PrepResult,
+  SchemaDetection,
+  CountryDetection,
+  ActiveLinesDetection,
+  KYCAnalysisResult,
+  AnalysisReport,
+  KYCColumnMapping,
+} from '../types/analysis';
 
-export type AnalysisStep = 'upload' | 'schema' | 'analysis' | 'report';
+export type AnalysisStep =
+  | 'upload'
+  | 'prep'
+  | 'schema'
+  | 'country'
+  | 'analysis'
+  | 'report';
 
 export function useKYCAnalysis() {
   const [currentStep, setCurrentStep] = useState<AnalysisStep>('upload');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Données du flux
   const [fileId, setFileId] = useState<string | null>(null);
-  const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
+  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [prepResult, setPrepResult] = useState<PrepResult | null>(null);
   const [schemaDetection, setSchemaDetection] = useState<SchemaDetection | null>(null);
+  const [schemaAutoValidated, setSchemaAutoValidated] = useState(false);
+  const [countryDetection, setCountryDetection] = useState<CountryDetection | null>(null);
+  const [activeLines, setActiveLines] = useState<ActiveLinesDetection | null>(null);
   const [analysisResult, setAnalysisResult] = useState<KYCAnalysisResult | null>(null);
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
   const [report, setReport] = useState<AnalysisReport | null>(null);
 
-  // Étape 1 : Upload
+  const runStep = async <T,>(
+    label: string,
+    fn: () => Promise<T>
+  ): Promise<T> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erreur inconnue';
+      console.error(`❌ ${label}:`, message);
+      setError(message);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Étape 1 : Upload (avec progression, pour les gros fichiers)
   const uploadFile = async (file: File) => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      console.log('📤 Uploading file:', file.name);
-      const info = await ApiService.uploadFile(file);
-      console.log('✅ Upload successful, fileId:', info.fileId);
-      
-      setFileId(info.fileId);
-      setFileInfo(info);
-      setCurrentStep('schema');
-      
-      return info;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur inconnue';
-      console.error('❌ Upload error:', message);
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    return runStep('Upload', async () => {
+      setUploadProgress(0);
+      try {
+        const result = await ApiService.uploadFile(file, setUploadProgress);
+        setFileId(result.fileId);
+        setUploadResult(result);
+        setCurrentStep('prep');
+        return result;
+      } finally {
+        setUploadProgress(null);
+      }
+    });
   };
 
-  // Étape 2 : Détecter le schéma
-  const detectSchema = async (detectedFileId?: string) => {
-    setIsLoading(true);
-    setError(null);
+  // Étape 2 : Prep agent (profiling du fichier — délimiteur, colonnes, échantillon)
+  const runPrep = async (upload?: UploadResult) => {
+    const uploadData = upload ?? uploadResult;
+    if (!uploadData) throw new Error('Aucun fichier uploadé');
+    return runStep('Prep', async () => {
+      const result = await ApiService.runPrep(uploadData.prepState);
+      setPrepResult(result);
+      if (result.prepStatus === 'error') {
+        throw new Error(result.prepError || 'Échec de la préparation du fichier');
+      }
 
-    const idToUse = detectedFileId || fileId;
-    if (!idToUse) {
-      const message = 'No file ID available';
-      setError(message);
-      throw new Error(message);
-    }
-
-    try {
-      console.log('🔍 Detecting schema for file:', idToUse);
-      const schema = await ApiService.detectSchema(idToUse);
-      console.log('✅ Schema detected:', schema);
-      
+      const schema = await ApiService.detectSchema(uploadData.fileId);
       setSchemaDetection(schema);
-      setCurrentStep('schema');
-      
-      return schema;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur inconnue';
-      console.error('❌ Schema detection error:', message);
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  // Étape 2b : Valider le schéma
-  const validateSchema = async (selectedColumns: Record<string, string>) => {
-    setIsLoading(true);
-    setError(null);
+      if (schema.isOrangeMoney) {
+        await ApiService.validateSchema(uploadData.fileId, schema.selectedColumns);
+        setSchemaAutoValidated(true);
+        const country = await ApiService.detectCountry(uploadData.fileId);
+        setCountryDetection(country);
+        setCurrentStep('country');
+      } else {
+        setSchemaAutoValidated(false);
+        setCurrentStep('schema');
+      }
 
-    if (!fileId) {
-      const message = 'No file ID available';
-      setError(message);
-      throw new Error(message);
-    }
-
-    try {
-      console.log('✅ Validating schema for file:', fileId);
-      await ApiService.validateSchema(fileId, selectedColumns);
-      console.log('✅ Schema validated');
-      
-      return true;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur inconnue';
-      console.error('❌ Schema validation error:', message);
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Étape 2c : Détecter le pays
-  const detectCountry = async () => {
-    setIsLoading(true);
-    setError(null);
-
-    if (!fileId) {
-      const message = 'No file ID available';
-      setError(message);
-      throw new Error(message);
-    }
-
-    try {
-      console.log('🌍 Detecting country for file:', fileId);
-      const country = await ApiService.detectCountry(fileId);
-      console.log('✅ Country detected:', country);
-      
-      return country;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur inconnue';
-      console.error('❌ Country detection error:', message);
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Étape 2d : Détecter les lignes actives
-  const detectActiveLines = async () => {
-    setIsLoading(true);
-    setError(null);
-
-    if (!fileId) {
-      const message = 'No file ID available';
-      setError(message);
-      throw new Error(message);
-    }
-
-    try {
-      console.log('📊 Detecting active lines for file:', fileId);
-      const activeLines = await ApiService.detectActiveLines(fileId);
-      console.log('✅ Active lines detected:', activeLines);
-      
-      return activeLines;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur inconnue';
-      console.error('❌ Active lines detection error:', message);
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Étape 3 : Analyser KYC
-  const analyzeKYC = async (selectedColumns: Record<string, string>) => {
-    setIsLoading(true);
-    setError(null);
-
-    if (!fileId) {
-      const message = 'No file ID available';
-      setError(message);
-      throw new Error(message);
-    }
-
-    try {
-      console.log('📊 Analyzing KYC for file:', fileId);
-      const result = await ApiService.analyzeKYC(fileId, selectedColumns);
-      console.log('✅ KYC analysis complete:', result);
-      
-      setAnalysisResult(result);
-      setCurrentStep('analysis');
-      
       return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur inconnue';
-      console.error('❌ KYC analysis error:', message);
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    });
   };
 
-  // Étape 4 : Générer le rapport
+  const dismissSchemaBanner = () => setSchemaAutoValidated(false);
+
+  // Étape 3 : Valider le mapping de colonnes KYC (cas non-Orange Money)
+  const validateSchema = async (columns: KYCColumnMapping) => {
+    if (!fileId) throw new Error('Aucun fichier sélectionné');
+    return runStep('Validation du schéma', async () => {
+      await ApiService.validateSchema(fileId, columns);
+      const country = await ApiService.detectCountry(fileId);
+      setCountryDetection(country);
+      setCurrentStep('country');
+      return true;
+    });
+  };
+
+  // Étape 4 : Confirmer le pays, puis enchaîner lignes actives + analyse
+  const validateCountry = async (country: string) => {
+    if (!fileId) throw new Error('Aucun fichier sélectionné');
+    return runStep('Validation du pays', async () => {
+      await ApiService.validateCountry(fileId, country);
+      setCountryDetection((prev) =>
+        prev ? { ...prev, detectedCountry: country, status: 'completed' } : prev
+      );
+      const lines = await ApiService.detectActiveLines(fileId);
+      setActiveLines(lines);
+
+      setAnalysisElapsedSeconds(0);
+      const timer = setInterval(() => {
+        setAnalysisElapsedSeconds((s) => s + 1);
+      }, 1000);
+
+      try {
+        const result = await ApiService.analyzeKYC(fileId);
+        setAnalysisResult(result);
+        setCurrentStep('analysis');
+        return result;
+      } finally {
+        clearInterval(timer);
+      }
+    });
+  };
+
+  // Étape 5 : Générer le rapport final (agent 3)
   const generateReport = async () => {
-    setIsLoading(true);
-    setError(null);
-
-    if (!fileId) {
-      const message = 'No file ID available';
-      setError(message);
-      throw new Error(message);
-    }
-
-    try {
-      console.log('📋 Generating report for file:', fileId);
+    if (!fileId) throw new Error('Aucun fichier sélectionné');
+    return runStep('Génération du rapport', async () => {
       const rep = await ApiService.generateReport(fileId);
-      console.log('✅ Report generated:', rep);
-      
       setReport(rep);
       setCurrentStep('report');
-      
       return rep;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur inconnue';
-      console.error('❌ Report generation error:', message);
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    });
   };
 
-  // Réinitialiser
+  const exportReportPdf = async () => {
+    if (!fileId) throw new Error('Aucun fichier sélectionné');
+    return runStep('Export PDF', async () => {
+      const blob = await ApiService.exportReportPdf(fileId);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `kyc-report-${fileId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    });
+  };
+
   const reset = () => {
     setCurrentStep('upload');
     setFileId(null);
-    setFileInfo(null);
+    setUploadResult(null);
+    setUploadProgress(null);
+    setPrepResult(null);
     setSchemaDetection(null);
+    setSchemaAutoValidated(false);
+    setCountryDetection(null);
+    setActiveLines(null);
     setAnalysisResult(null);
+    setAnalysisElapsedSeconds(0);
     setReport(null);
     setError(null);
   };
@@ -231,17 +189,23 @@ export function useKYCAnalysis() {
     isLoading,
     error,
     fileId,
-    fileInfo,
+    uploadResult,
+    uploadProgress,
+    prepResult,
     schemaDetection,
+    schemaAutoValidated,
+    dismissSchemaBanner,
+    countryDetection,
+    activeLines,
     analysisResult,
+    analysisElapsedSeconds,
     report,
     uploadFile,
-    detectSchema,
+    runPrep,
     validateSchema,
-    detectCountry,
-    detectActiveLines,
-    analyzeKYC,
+    validateCountry,
     generateReport,
+    exportReportPdf,
     reset,
   };
 }

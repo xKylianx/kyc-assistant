@@ -3,8 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from sqlalchemy import Column, String, DateTime, Float, Boolean, Text
 from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
+from src.db.base import Base
 
 
 class SchemaMapping(Base):
