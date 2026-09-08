@@ -11,17 +11,119 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+ANALYSIS_CHUNK_SIZE = 50_000
+
+
+def _sql_ident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+class ChunkedColumn:
+    """
+    Lazy column reader backed by DuckDB. Iteration fetches at most
+    ANALYSIS_CHUNK_SIZE rows at a time, keeping large CSV analysis bounded
+    in memory instead of calling fetchall().
+    """
+
+    def __init__(
+        self,
+        file_path: str,
+        column: str,
+        delimiter: str = ",",
+        active_status_column: str | None = None,
+        active_status_values: list | None = None,
+        drop_nulls: bool = False,
+        uppercase: bool = False,
+        expected_length: int | None = None,
+        chunk_size: int = ANALYSIS_CHUNK_SIZE,
+    ):
+        self.file_path = file_path
+        self.column = column
+        self.delimiter = delimiter or ","
+        self.active_status_column = active_status_column
+        self.active_status_values = active_status_values or []
+        self.drop_nulls = drop_nulls
+        self.uppercase = uppercase  # NOTE: manquait dans l'__init__ d'origine
+        self.expected_length = expected_length
+        self.chunk_size = chunk_size
+
+    def _relation(self) -> str:
+        path = str(self.file_path).replace("'", "''")
+        delim = str(self.delimiter).replace("'", "''")
+        # all_varchar=True est essentiel : sans lui, DuckDB détecte
+        # automatiquement les colonnes qui ressemblent à des dates/nombres
+        # (ex: dob au format ISO) et les caste en TIMESTAMP en interne,
+        # ce qui reformate silencieusement la valeur avant même le CAST
+        # explicite en VARCHAR — cassant toute détection de format côté Python.
+        return (
+            f"read_csv_auto({_sql_literal(path)}, delim={_sql_literal(delim)}, "
+            f"header=True, all_varchar=True, ignore_errors=True)"
+        )
+
+    def _conditions(self) -> list[str]:
+        conditions = []
+        if self.active_status_column and self.active_status_values:
+            values = ", ".join(_sql_literal(v) for v in self.active_status_values)
+            conditions.append(f"{_sql_ident(self.active_status_column)} IN ({values})")
+        if self.drop_nulls:
+            conditions.append(f"{_sql_ident(self.column)} IS NOT NULL")
+            conditions.append(
+                f"TRIM(CAST({_sql_ident(self.column)} AS VARCHAR)) <> ''"
+            )
+        return conditions
+
+    def _where_sql(self) -> str:
+        conditions = self._conditions()
+        if not conditions:
+            return ""
+        return " WHERE " + " AND ".join(conditions)
+
+    def __iter__(self):
+        con = duckdb.connect(database=":memory:")
+        try:
+            query = (
+                f"SELECT CAST({_sql_ident(self.column)} AS VARCHAR) "
+                f"FROM {self._relation()}{self._where_sql()}"
+            )
+            print(query)
+            cursor = con.execute(query)
+            while True:
+                rows = cursor.fetchmany(self.chunk_size)
+                if not rows:
+                    break
+                for (value,) in rows:
+                    normalized = "" if value is None else str(value).strip()
+                    yield normalized.upper() if self.uppercase else normalized
+        finally:
+            con.close()
+
+    def __len__(self) -> int:
+        if self.expected_length is not None and not self.drop_nulls:
+            return self.expected_length
+
+        con = duckdb.connect(database=":memory:")
+        try:
+            query = f"SELECT COUNT(*) FROM {self._relation()}{self._where_sql()}"
+            print(query)
+            return int(con.execute(query).fetchone()[0])
+        finally:
+            con.close()
+
 
 # Initialize the LLM (adjust based on your setup)
 model = ChatOpenAI(
-     model= "openai/gpt-5-chat",
+     model= os.getenv("LLM_PROXY_MODEL"),  # Adjust based on your config
      api_key=os.getenv("OPENAI_API_KEY"),
      base_url = os.getenv("BASE_URL"),
 )
 
 model_5_1 = ChatOpenAI(
-        model= "openai/gpt-5.1",
-        api_key=os.getenv("OPENAI_API_KEY_GPT_5_1"),
+        model= os.getenv("LLM_PROXY_MODEL"),
+        api_key=os.getenv("OPENAI_API_KEY"),
         base_url = os.getenv("BASE_URL"),
 )
 
@@ -71,11 +173,6 @@ def analyze_msisdn(state: AnalysisAgentState) -> AnalysisAgentState:
         }
         return state
     
-    # ✅ PRÉSERVER active_rows_count si nécessaire
-    if active_rows_count == 0 and data:
-        active_rows_count = len(data)
-        state["active_rows_count"] = active_rows_count
-    
     try:
         con = duckdb.connect()
         
@@ -109,10 +206,13 @@ def analyze_msisdn(state: AnalysisAgentState) -> AnalysisAgentState:
             ]
         else:
             # Lire depuis fichier
-            result = con.execute(
-                f'SELECT CAST("{msisdn_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            msisdn_values = [str(row[0]).strip() for row in result if row[0]]
+            msisdn_values = ChunkedColumn(
+                file_path, msisdn_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                drop_nulls=True,
+            )
         
         # Compter les valeurs null/vides
         null_count = active_rows_count - len(msisdn_values)
@@ -178,7 +278,7 @@ def analyze_msisdn(state: AnalysisAgentState) -> AnalysisAgentState:
         # ====================================================================
         
         if non_null_count > 0:
-            compliance_rate = (valid_count / non_null_count) * 100
+            compliance_rate = (valid_count / active_rows_count) * 100
         else:
             compliance_rate = 0.0
         
@@ -318,10 +418,6 @@ def analyze_first_name(state: AnalysisAgentState) -> AnalysisAgentState:
     print("\n" + "=" * 60)
     print("👤 ANALYZING FIRST NAME")
     print("=" * 60)
-
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -381,10 +477,13 @@ def analyze_first_name(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{first_name_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            first_names = [str(row[0]).strip() if row[0] else "" for row in result]
+            first_names = ChunkedColumn(
+                file_path, first_name_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -589,9 +688,6 @@ def analyze_last_name(state: AnalysisAgentState) -> AnalysisAgentState:
     print("👤 ANALYZING LAST NAME")
     print("=" * 60)
 
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -651,10 +747,13 @@ def analyze_last_name(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{last_name_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            last_names = [str(row[0]).strip() if row[0] else "" for row in result]
+            last_names = ChunkedColumn(
+                file_path, last_name_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -861,10 +960,6 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
     print("\n" + "=" * 60)
     print("🆔 ANALYZING ID TYPE")
     print("=" * 60)
-
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -925,10 +1020,14 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{id_type_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            id_types = [str(row[0]).strip().upper() if row[0] else "" for row in result]
+            id_types = ChunkedColumn(
+                file_path, id_type_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                uppercase=True,
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -1006,7 +1105,7 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
         # ====================================================================
         
         if non_null_count > 0:
-            compliance_rate = (valid_type_count / non_null_count) * 100
+            compliance_rate = (valid_type_count / active_rows_count) * 100
         else:
             compliance_rate = 0.0
         
@@ -1153,33 +1252,23 @@ def analyze_id_type(state: AnalysisAgentState) -> AnalysisAgentState:
 
 def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
     """
-    Analyse la colonne numéro d'ID avec validation complète par pays et type.
+    Analyse la colonne numéro d'ID.
     
-    Pour Madagascar CNI: 12 chiffres exactement
-    Détecte les anomalies, les doublons, les patterns suspects.
+    Si un type d'ID dominant a été détecté (analyze_id_type), valide contre
+    les règles de ce type précis. Sinon (type absent/non fiable — cas
+    fréquent avec des données de qualité variable), valide chaque numéro
+    contre TOUS les formats connus du pays et considère valide tout numéro
+    qui matche au moins un format.
     
-    Utilise active_rows_count du state pour éviter les recalculs.
     TOUTES LES REQUÊTES S'EXÉCUTENT UNIQUEMENT SUR LES LIGNES ACTIVES.
-    
-    Args:
-        state: AnalysisAgentState avec file_path, schema_mapping, country, detected_id_type, active_rows_count
-        
-    Returns:
-        État mis à jour avec résultats d'analyse numéro d'ID
     """
     
     print("\n" + "=" * 60)
     print("🔢 ANALYZING ID NUMBER")
     print("=" * 60)
 
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
-    
-    # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
     
-    # Récupérer la colonne numéro d'ID
     schema_mapping = state.get("schema_mapping", {})
     id_number_column = schema_mapping.get("id_number_column")
     
@@ -1207,7 +1296,8 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
     try:
         from src.config.id_validation_rules import (
             get_id_validation_rules,
-            validate_id_number
+            validate_id_number,
+            validate_id_number_any_type,
         )
         from collections import Counter
         import re
@@ -1226,56 +1316,41 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
             }
             return state
         
-        # ====================================================================
-        # STEP 1: Charger les données
-        # ====================================================================
-        
         print(f"\n📊 Extracting ID numbers...")
         
         if data:
-            # Données en mémoire
             id_numbers = [
                 str(record.get(id_number_column, "")).strip()
                 for record in data
             ]
         else:
-            # Lire depuis fichier
-            con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{id_number_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            id_numbers = [str(row[0]).strip() if row[0] else "" for row in result]
-            con.close()
+            id_numbers = ChunkedColumn(
+                file_path, id_number_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
         
         print(f"   ✓ Total records: {active_rows_count:,}")
         
-        # ====================================================================
-        # STEP 2: Récupérer les règles de validation
-        # ====================================================================
+        # Détermine le mode de validation : type précis connu, ou fallback
+        # multi-types si le type d'ID est absent/non reconnu pour ce pays.
+        single_type_rules = get_id_validation_rules(country, detected_id_type)
+        use_any_type_mode = not detected_id_type or not single_type_rules or "format" not in single_type_rules
         
-        rules = get_id_validation_rules(country, detected_id_type)
-        
-        if not rules:
-            print(f"⚠️ No validation rules for {country} - {detected_id_type}")
-            state["id_number_analysis"] = {
-                "status": "warning",
-                "row_count": active_rows_count,
-                "warning": f"No validation rules for {country} - {detected_id_type}"
-            }
-            return state
-        
-        print(f"\n📋 Validation Rules:")
-        print(f"   • Format: {rules.get('format')}")
-        print(f"   • Pattern: {rules.get('pattern')}")
-        print(f"   • Length: {rules.get('length', 'Variable')}")
-        
-        # ====================================================================
-        # STEP 3: Analyser les numéros d'ID
-        # ====================================================================
+        if use_any_type_mode:
+            print(f"\n⚠️ ID type absent ou non reconnu — validation multi-types activée")
+            print(f"   Un numéro sera considéré valide s'il correspond à au moins")
+            print(f"   un des formats connus pour {country}.")
+        else:
+            print(f"\n📋 Validation Rules ({detected_id_type}):")
+            print(f"   • Format: {single_type_rules.get('format')}")
+            print(f"   • Pattern: {single_type_rules.get('pattern')}")
+            print(f"   • Length: {single_type_rules.get('length', 'Variable')}")
         
         print(f"\n📊 Analyzing ID numbers...")
         
-        # Compteurs
         null_count = sum(1 for id_num in id_numbers if not id_num or id_num == "")
         non_null_count = active_rows_count - null_count
         
@@ -1292,57 +1367,59 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
             }
             return state
         
-        # ====================================================================
-        # STEP 4: Valider chaque numéro et collecter les erreurs
-        # ====================================================================
-        
         print(f"\n📊 Validating ID numbers...")
         
         valid_count = 0
         invalid_count = 0
         validation_errors = Counter()
+        matched_type_distribution = Counter()  # utile seulement en mode multi-types
         length_distribution = Counter()
         duplicate_ids = Counter()
         
-        # Listes pour analyses supplémentaires
         valid_ids = []
-        invalid_ids = []
         
-        for idx, id_num in enumerate(id_numbers):
+        for id_num in id_numbers:
             if not id_num:
                 continue
             
-            # Valider
-            validation_result = validate_id_number(id_num, country, detected_id_type)
-            
-            if validation_result["valid"]:
-                valid_count += 1
-                valid_ids.append(id_num)
-                duplicate_ids[id_num] += 1
+            if use_any_type_mode:
+                validation_result = validate_id_number_any_type(id_num, country)
+                if validation_result["valid"]:
+                    valid_count += 1
+                    valid_ids.append(id_num)
+                    duplicate_ids[id_num] += 1
+                    matched_type_distribution[validation_result["matched_type"]] += 1
+                else:
+                    invalid_count += 1
+                    validation_errors[validation_result.get("error", "Unknown error")] += 1
             else:
-                invalid_count += 1
-                invalid_ids.append(id_num)
-                error = validation_result.get("error", "Unknown error")
-                validation_errors[error] += 1
+                validation_result = validate_id_number(id_num, country, detected_id_type)
+                if validation_result["valid"]:
+                    valid_count += 1
+                    valid_ids.append(id_num)
+                    duplicate_ids[id_num] += 1
+                else:
+                    invalid_count += 1
+                    error = validation_result.get("error", "Unknown error")
+                    validation_errors[error] += 1
             
-            # Distribution des longueurs
             length_distribution[len(id_num)] += 1
         
         print(f"   ✓ Valid: {valid_count:,}")
         print(f"   ✓ Invalid: {invalid_count:,}")
+        
+        if use_any_type_mode and matched_type_distribution:
+            print(f"\n   Répartition des formats détectés parmi les valides:")
+            for type_key, count in matched_type_distribution.most_common():
+                print(f"   • {type_key}: {count:,}")
         
         if validation_errors:
             print(f"\n   Validation Errors (Top 5):")
             for error, count in validation_errors.most_common(5):
                 print(f"   • {error}: {count:,}")
         
-        # ====================================================================
-        # STEP 5: Détecter les doublons
-        # ====================================================================
-        
         print(f"\n📊 Detecting duplicates...")
         
-        # Compter les doublons (IDs qui apparaissent plus d'une fois)
         duplicate_count = sum(1 for id_num, count in duplicate_ids.items() if count > 1)
         duplicate_records_count = sum(count - 1 for count in duplicate_ids.values() if count > 1)
         
@@ -1350,7 +1427,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         print(f"   ✓ Duplicate IDs: {duplicate_count:,}")
         print(f"   ✓ Duplicate records: {duplicate_records_count:,}")
         
-        # Top doublons
         top_duplicates = duplicate_ids.most_common(5)
         if top_duplicates:
             print(f"\n   Top Duplicates:")
@@ -1358,39 +1434,29 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 if count > 1:
                     print(f"   • {id_num}: {count} occurrences")
         
-        # ====================================================================
-        # STEP 6: Analyser la distribution des longueurs
-        # ====================================================================
-        
         print(f"\n📊 Length Distribution:")
         for length, count in sorted(length_distribution.items()):
             percentage = (count / non_null_count) * 100
             print(f"   • {length} chars: {count:,} ({percentage:.2f}%)")
         
         most_common_length = length_distribution.most_common(1)[0][0] if length_distribution else 0
-        expected_length = rules.get("length")
-        
-        # ====================================================================
-        # STEP 7: Détecter les patterns suspects
-        # ====================================================================
+        expected_length = None if use_any_type_mode else single_type_rules.get("length")
         
         print(f"\n📊 Detecting suspicious patterns...")
         
         suspicious_patterns = {
-            "sequential": 0,  # 123456789012
-            "repeated": 0,    # 111111111111
-            "all_zeros": 0,   # 000000000000
-            "all_nines": 0,   # 999999999999
+            "sequential": 0,
+            "repeated": 0,
+            "all_zeros": 0,
+            "all_nines": 0,
         }
         
         for id_num in valid_ids:
-            # Pattern séquentiel
             if re.match(r'^[0-9]{2,}$', id_num):
                 digits = [int(d) for d in id_num]
                 if all(digits[i] == digits[i-1] + 1 for i in range(1, len(digits))):
                     suspicious_patterns["sequential"] += 1
             
-            # Chiffres répétés
             if len(set(id_num)) == 1:
                 if id_num[0] == '0':
                     suspicious_patterns["all_zeros"] += 1
@@ -1404,16 +1470,11 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         print(f"   ✓ All zeros: {suspicious_patterns['all_zeros']:,}")
         print(f"   ✓ All nines: {suspicious_patterns['all_nines']:,}")
         
-        # ====================================================================
-        # STEP 8: Calculer la conformité
-        # ====================================================================
-        
-        if non_null_count > 0:
-            compliance_rate = (valid_count / non_null_count) * 100
+        if active_rows_count > 0:
+            compliance_rate = (valid_count / active_rows_count) * 100
         else:
             compliance_rate = 0.0
         
-        # Déterminer le statut
         if compliance_rate >= 95:
             compliance_status = "excellent"
             risk_score = 0.1
@@ -1427,10 +1488,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
             compliance_status = "poor"
             risk_score = 0.7
         
-        # ====================================================================
-        # STEP 9: Détecter les anomalies
-        # ====================================================================
-        
         anomalies = []
         
         if null_count > (active_rows_count * 0.05):
@@ -1441,7 +1498,7 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "severity": "high"
             })
         
-        if invalid_count > (non_null_count * 0.1):
+        if invalid_count > (active_rows_count * 0.1):
             anomalies.append({
                 "type": "invalid_format",
                 "count": invalid_count,
@@ -1472,7 +1529,7 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
             })
         
         suspicious_total = sum(suspicious_patterns.values())
-        if suspicious_total > (valid_count * 0.05):
+        if valid_count > 0 and suspicious_total > (valid_count * 0.05):
             anomalies.append({
                 "type": "suspicious_patterns",
                 "count": suspicious_total,
@@ -1481,40 +1538,47 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "details": suspicious_patterns
             })
         
-        # ====================================================================
-        # STEP 10: Construire le résultat
-        # ====================================================================
+        if use_any_type_mode:
+            anomalies.append({
+                "type": "id_type_undetected",
+                "count": null_count if detected_id_type is None else 0,
+                "percentage": 0,
+                "severity": "low",
+                "note": (
+                    "Le type d'ID n'a pas pu être déterminé de façon fiable "
+                    "(colonne vide ou incohérente). Les numéros ont été "
+                    "validés contre tous les formats connus du pays."
+                )
+            })
         
         analysis_result = {
             "status": "completed",
             "country": country,
             "id_type": detected_id_type,
+            "validation_mode": "any_type" if use_any_type_mode else "single_type",
             "column_analyzed": id_number_column,
             
-            # Comptages
             "row_count": active_rows_count,
             "null_count": null_count,
             "non_null_count": non_null_count,
             "valid_count": valid_count,
             "invalid_count": invalid_count,
             
-            # Conformité
             "compliance_rate": round(compliance_rate, 2),
             "compliance_status": compliance_status,
             "risk_score": risk_score,
             
-            # Format
             "format_details": {
-                "expected_format": rules.get("format"),
+                "expected_format": None if use_any_type_mode else single_type_rules.get("format"),
                 "expected_length": expected_length,
                 "most_common_length": most_common_length,
-                "pattern": rules.get("pattern"),
+                "pattern": None if use_any_type_mode else single_type_rules.get("pattern"),
             },
             
-            # Distribution des longueurs
+            "matched_type_distribution": dict(matched_type_distribution) if use_any_type_mode else None,
+            
             "length_distribution": dict(length_distribution),
             
-            # Doublons
             "duplicates": {
                 "unique_valid_ids": len(set(valid_ids)),
                 "duplicate_ids_count": duplicate_count,
@@ -1523,13 +1587,9 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "top_duplicates": dict(top_duplicates[:5])
             },
             
-            # Patterns suspects
             "suspicious_patterns": suspicious_patterns,
-            
-            # Erreurs de validation
             "validation_errors": dict(validation_errors.most_common(10)),
             
-            # Contrôles
             "controls": {
                 "Null Values": null_count,
                 "Invalid Format": invalid_count,
@@ -1537,7 +1597,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "Suspicious Patterns": suspicious_total,
             },
             
-            # Résumé
             "summary": {
                 "total_records": active_rows_count,
                 "records_with_data": non_null_count,
@@ -1546,13 +1605,13 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
                 "data_quality_score": round(compliance_rate, 2),
             },
             
-            # Anomalies
             "anomalies": anomalies,
         }
         
         state["id_number_analysis"] = analysis_result
         
         print(f"\n✅ ID Number Analysis Complete")
+        print(f"   Mode: {'Multi-types' if use_any_type_mode else detected_id_type}")
         print(f"   Compliance: {compliance_rate:.2f}%")
         print(f"   Status: {compliance_status.upper()}")
         print(f"   Risk Score: {risk_score}")
@@ -1575,7 +1634,6 @@ def analyze_id_number(state: AnalysisAgentState) -> AnalysisAgentState:
         
         print("=" * 60)
         return state
-
 def analyze_dob(state: AnalysisAgentState) -> AnalysisAgentState:
     """
     Analyse la colonne date de naissance pour validité et problèmes courants.
@@ -1595,10 +1653,6 @@ def analyze_dob(state: AnalysisAgentState) -> AnalysisAgentState:
     print("📅 ANALYZING DATE OF BIRTH")
     print("=" * 60)
 
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
-    
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
     
@@ -1672,10 +1726,13 @@ def analyze_dob(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{dob_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            dob_values = [str(row[0]).strip() if row[0] else "" for row in result]
+            dob_values = ChunkedColumn(
+                file_path, dob_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -1804,7 +1861,8 @@ def analyze_dob(state: AnalysisAgentState) -> AnalysisAgentState:
         # ====================================================================
         
         if non_null_count > 0:
-            compliance_rate = (valid_count / non_null_count) * 100
+            #The compliante rate should be calculated based on the valid_count and the total number of active records, excluding the anomalies.
+            compliance_rate = (valid_count / active_rows_count) * 100
         else:
             compliance_rate = 0.0
         
@@ -1988,10 +2046,6 @@ def analyze_city(state: AnalysisAgentState) -> AnalysisAgentState:
     print("\n" + "=" * 60)
     print("🏙️ ANALYZING CITY")
     print("=" * 60)
-
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
     
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
@@ -2052,10 +2106,13 @@ def analyze_city(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{city_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            city_values = [str(row[0]).strip() if row[0] else "" for row in result]
+            city_values = ChunkedColumn(
+                file_path, city_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -2329,10 +2386,6 @@ def analyze_address(state: AnalysisAgentState) -> AnalysisAgentState:
     print("📍 ANALYZING ADDRESS")
     print("=" * 60)
 
-    # ✅ PRÉSERVER active_rows_count
-    if "active_rows_count" not in state or state["active_rows_count"] == 0:
-        state["active_rows_count"] = active_rows_count
-    
     # ✅ Récupérer active_rows_count depuis state
     active_rows_count = state.get("active_rows_count", 0)
     
@@ -2392,10 +2445,13 @@ def analyze_address(state: AnalysisAgentState) -> AnalysisAgentState:
         else:
             # Lire depuis fichier
             con = duckdb.connect()
-            result = con.execute(
-                f'SELECT CAST("{address_column}" AS VARCHAR) FROM read_csv_auto(\'{file_path}\')'
-            ).fetchall()
-            address_values = [str(row[0]).strip() if row[0] else "" for row in result]
+            address_values = ChunkedColumn(
+                file_path, address_column,
+                delimiter=state.get("detected_delimiter") or ",",
+                active_status_column=state.get("active_status_column"),
+                active_status_values=state.get("active_status_values"),
+                expected_length=active_rows_count,
+            )
             con.close()
         
         print(f"   ✓ Total records: {active_rows_count:,}")
@@ -2625,193 +2681,4 @@ def analyze_address(state: AnalysisAgentState) -> AnalysisAgentState:
         }
         
         print("=" * 60)
-    
-        # ✅ AJOUTER L'AGRÉGATION À LA FIN
-        print("\n" + "=" * 60)
-        print("📊 AGGREGATING ANALYSIS RESULTS")
-        print("=" * 60)
-        
-        try:
-            # Récupérer tous les résultats
-            analyses = {
-                "msisdn": state.get("msisdn_analysis", {}),
-                "first_name": state.get("first_name_analysis", {}),
-                "last_name": state.get("last_name_analysis", {}),
-                "id_type": state.get("id_type_analysis", {}),
-                "id_number": state.get("id_number_analysis", {}),
-                "dob": state.get("dob_analysis", {}),
-                "city": state.get("city_analysis", {}),
-                "address": state.get("address_analysis", {}),
-            }
-            
-            # ====================================================================
-            # CALCULER LES SCORES GLOBAUX
-            # ====================================================================
-            
-            print(f"\n📊 Calculating global scores...")
-            
-            # Collecter les compliance rates
-            compliance_rates = []
-            risk_scores = []
-            anomalies_count = 0
-            
-            for field, analysis in analyses.items():
-                if analysis.get("status") == "completed":
-                    compliance = analysis.get("compliance_rate", 0)
-                    risk = analysis.get("risk_score", 0)
-                    anomalies = len(analysis.get("anomalies", []))
-                    
-                    compliance_rates.append(compliance)
-                    risk_scores.append(risk)
-                    anomalies_count += anomalies
-                    
-                    print(f"   • {field}: {compliance:.2f}% compliance, {risk} risk")
-            
-            # Moyenne des compliance rates
-            if compliance_rates:
-                overall_compliance_rate = sum(compliance_rates) / len(compliance_rates)
-            else:
-                overall_compliance_rate = 0.0
-            
-            # Moyenne des risk scores
-            if risk_scores:
-                overall_risk_score = sum(risk_scores) / len(risk_scores)
-            else:
-                overall_risk_score = 0.0
-            
-            # ====================================================================
-            # DÉTERMINER LE NIVEAU DE RISQUE GLOBAL
-            # ====================================================================
-            
-            if overall_risk_score <= 0.15:
-                overall_risk_level = "LOW"
-            elif overall_risk_score <= 0.35:
-                overall_risk_level = "MEDIUM"
-            elif overall_risk_score <= 0.55:
-                overall_risk_level = "HIGH"
-            else:
-                overall_risk_level = "CRITICAL"
-            
-            # ====================================================================
-            # COLLECTER TOUTES LES ANOMALIES
-            # ====================================================================
-            
-            print(f"\n📊 Collecting anomalies...")
-            
-            all_anomalies = {}
-            for field, analysis in analyses.items():
-                if analysis.get("status") == "completed":
-                    anomalies = analysis.get("anomalies", [])
-                    if anomalies:
-                        all_anomalies[field] = anomalies
-                        print(f"   • {field}: {len(anomalies)} anomalies")
-            
-            # ====================================================================
-            # CRÉER LE RÉSUMÉ EXÉCUTIF
-            # ====================================================================
-            
-            print(f"\n📊 Creating executive summary...")
-            
-            # Compter les champs complétés vs skippés
-            completed_fields = sum(1 for a in analyses.values() if a.get("status") == "completed")
-            skipped_fields = sum(1 for a in analyses.values() if a.get("status") == "skipped")
-            error_fields = sum(1 for a in analyses.values() if a.get("status") == "error")
-            
-            # Identifier les champs critiques
-            critical_fields = []
-            for field, analysis in analyses.items():
-                if analysis.get("status") == "completed":
-                    anomalies = analysis.get("anomalies", [])
-                    for anomaly in anomalies:
-                        if anomaly.get("severity") == "high":
-                            critical_fields.append({
-                                "field": field,
-                                "anomaly": anomaly.get("type"),
-                                "count": anomaly.get("count"),
-                                "percentage": anomaly.get("percentage")
-                            })
-            
-            # ====================================================================
-            # CONSTRUIRE LE RÉSULTAT AGRÉGÉ
-            # ====================================================================
-            
-            def get_recommendation(risk_level: str, critical_fields: list) -> str:
-                """Génère une recommandation basée sur le niveau de risque."""
-                if risk_level == "CRITICAL":
-                    return "⛔ CRITICAL: Reject this dataset. Multiple critical issues detected. Manual review required."
-                elif risk_level == "HIGH":
-                    return "⚠️ HIGH RISK: Review required. Address critical issues before processing."
-                elif risk_level == "MEDIUM":
-                    return "⚡ MEDIUM RISK: Proceed with caution. Monitor identified issues."
-                else:
-                    return "✅ LOW RISK: Dataset appears clean. Proceed with normal processing."
-            
-            aggregated_result = {
-                "status": "completed",
-                "file_id": state.get("file_id"),
-                "thread_id": state.get("thread_id"),
-                "country": state.get("country"),
-                "active_rows_count": state.get("active_rows_count"),
-                
-                # Scores globaux
-                "overall_compliance_rate": round(overall_compliance_rate, 2),
-                "overall_risk_score": round(overall_risk_score, 2),
-                "overall_risk_level": overall_risk_level,
-                
-                # Comptages
-                "fields_analyzed": {
-                    "completed": completed_fields,
-                    "skipped": skipped_fields,
-                    "errors": error_fields,
-                    "total": len(analyses)
-                },
-                
-                # Anomalies
-                "total_anomalies": anomalies_count,
-                "anomalies_by_field": all_anomalies,
-                "critical_fields": critical_fields,
-                
-                # Résultats détaillés
-                "detailed_results": analyses,
-                
-                # Résumé exécutif
-                "executive_summary": {
-                    "overall_data_quality": "EXCELLENT" if overall_compliance_rate >= 95 else 
-                                        "GOOD" if overall_compliance_rate >= 90 else
-                                        "FAIR" if overall_compliance_rate >= 80 else
-                                        "POOR",
-                    "risk_assessment": overall_risk_level,
-                    "fields_with_issues": len(all_anomalies),
-                    "critical_issues": len(critical_fields),
-                    "recommendation": get_recommendation(overall_risk_level, critical_fields)
-                }
-            }
-            
-            state["aggregated_results"] = aggregated_result
-            state["analysis_status"] = "completed"
-            
-            print(f"\n✅ Aggregation Complete")
-            print(f"   Overall Compliance: {overall_compliance_rate:.2f}%")
-            print(f"   Overall Risk: {overall_risk_level}")
-            print(f"   Risk Score: {overall_risk_score:.2f}")
-            print(f"   Anomalies: {anomalies_count}")
-            print(f"   Critical Fields: {len(critical_fields)}")
-            print("=" * 60)
-            
-            return state
-            
-        except Exception as e:
-            print(f"\n✗ Error during aggregation: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            
-            state["analysis_status"] = "error"
-            state["analysis_error"] = str(e)
-            state["aggregated_results"] = {
-                "status": "error",
-                "error": str(e)
-            }
-            
-            print("=" * 60)
-            return state
-
+        return state

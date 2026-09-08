@@ -1,34 +1,40 @@
-import type { Config } from "tailwindcss"
+import type { Config } from "tailwindcss";
 
 const config: Config = {
   content: [
-    './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/components/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/app/**/*.{js,ts,jsx,tsx,mdx}',
+    "./src/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
     extend: {
       colors: {
+        "orange-primary": "#FF7900",
         orange: {
-          50: '#fff7ed',
-          100: '#ffedd5',
-          200: '#fed7aa',
-          300: '#fdba74',
-          400: '#fb923c',
-          500: '#f97316',
-          600: '#ea580c',
-          700: '#c2410c',
-          800: '#9a3412',
-          900: '#7c2d12',
-          primary: '#FF6600',
-          dark: '#1a1a1a',
+          DEFAULT: "#FF7900",
+          50: "#FFF3E8",
+          100: "#FFE1C2",
+          500: "#FF7900",
+          600: "#E56C00",
+        },
+        brand: {
+          blue: "#4BB4E6",
+          purple: "#9164CD",
+          green: "#50BE87",
+          pink: "#FFB4E6",
+          yellow: "#FFDC00",
+          gray: {
+            dark: "#595959",
+            DEFAULT: "#8F8F8F",
+            light: "#D6D6D6",
+          },
+          black: "#000000",
         },
       },
       fontFamily: {
-        sans: ['Inter', 'sans-serif'],
+        sans: ["Helvetica Neue", "Helvetica", "Arial", "sans-serif"],
       },
     },
   },
-}
+  plugins: [],
+};
 
-export default config
+export default config;

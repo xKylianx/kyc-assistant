@@ -1,72 +1,43 @@
 'use client';
 
-import { AlertCircle, CheckCircle, AlertTriangle } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/card';
+import { AlertCircle, AlertTriangle, Info } from 'lucide-react';
+import { fieldLabel } from '@/src/lib/kycFields';
+import { Severity } from '@/src/types/analysis';
 
 interface AnomalyCardProps {
-  title: string;
-  description: string;
-  severity: 'info' | 'warning' | 'error';
-  confidence: number; // 0-100
+  field: string;
+  type: string;
+  count: number;
+  percentage: number;
+  severity: Severity;
 }
 
-export function AnomalyCard({
-  title,
-  description,
-  severity,
-  confidence,
-}: AnomalyCardProps) {
-  const icons = {
-    info: <CheckCircle className="w-5 h-5 text-blue-500" />,
-    warning: <AlertTriangle className="w-5 h-5 text-yellow-500" />,
-    error: <AlertCircle className="w-5 h-5 text-red-500" />,
-  };
+const SEVERITY_CONFIG: Record<Severity, { icon: typeof AlertCircle; bg: string; text: string }> = {
+  error: { icon: AlertCircle, bg: 'bg-red-50', text: 'text-red-800' },
+  warning: { icon: AlertTriangle, bg: 'bg-yellow-50', text: 'text-yellow-800' },
+  info: { icon: Info, bg: 'bg-blue-50', text: 'text-blue-800' },
+};
 
-  const borderColors = {
-    info: 'border-l-4 border-l-blue-500',
-    warning: 'border-l-4 border-l-yellow-500',
-    error: 'border-l-4 border-l-red-500',
-  };
+// Rend un type d'anomalie technique (ex. "non_numeric_values") lisible
+function humanizeAnomalyType(type: string): string {
+  return type.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+}
 
-  const bgColors = {
-    info: 'bg-blue-50',
-    warning: 'bg-yellow-50',
-    error: 'bg-red-50',
-  };
+export function AnomalyCard({ field, type, count, percentage, severity }: AnomalyCardProps) {
+  const config = SEVERITY_CONFIG[severity] ?? SEVERITY_CONFIG.info;
+  const Icon = config.icon;
 
   return (
-    <Card className={`${borderColors[severity]} ${bgColors[severity]}`}>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="flex items-start gap-3">
-            {icons[severity]}
-            <div>
-              <CardTitle className="text-base">{title}</CardTitle>
-              <p className="text-sm text-gray-600 mt-1">{description}</p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-sm font-semibold text-gray-900">
-              {confidence}%
-            </p>
-            <p className="text-xs text-gray-500">confiance</p>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="w-full bg-gray-200 rounded-full h-2">
-          <div
-            className={`h-2 rounded-full transition-all ${
-              severity === 'error'
-                ? 'bg-red-500'
-                : severity === 'warning'
-                  ? 'bg-yellow-500'
-                  : 'bg-blue-500'
-            }`}
-            style={{ width: `${confidence}%` }}
-          />
-        </div>
-      </CardContent>
-    </Card>
+    <div className={`flex items-start gap-3 rounded-lg p-3 ${config.bg}`}>
+      <Icon className={`w-4 h-4 flex-shrink-0 mt-0.5 ${config.text}`} />
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm font-semibold ${config.text}`}>
+          {fieldLabel(field)} — {humanizeAnomalyType(type)}
+        </p>
+        <p className="text-xs text-gray-600 mt-0.5">
+          {count.toLocaleString('fr-FR')} enregistrement{count > 1 ? 's' : ''} ({percentage}%)
+        </p>
+      </div>
+    </div>
   );
 }

@@ -10,12 +10,20 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-# Initialize LLM
 llm = ChatOpenAI(
-    model="openai/gpt-5-chat",
+    model=os.getenv("LLM_PROXY_MODEL"),
     api_key=os.getenv("OPENAI_API_KEY"),
     base_url=os.getenv("BASE_URL"),
 )
+
+
+def _read_csv_sql(file_path: str, delimiter: str) -> str:
+    """
+    Fragment SQL réutilisable pour lire le CSV avec tolérance aux lignes
+    malformées (nombre de colonnes incohérent) — cohérent avec prep_agent.py
+    et ChunkedColumn dans data_analysis_nodes.py.
+    """
+    return f"read_csv_auto('{file_path}', delim='{delimiter}', ignore_errors=true, null_padding=true)"
 
 
 def detect_active_lines(
@@ -26,20 +34,6 @@ def detect_active_lines(
     status_column: Optional[str] = None,
     detected_delimiter: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Détecte les lignes actives et identifie les valeurs de statut correspondantes.
-    
-    Args:
-        db: Session SQLAlchemy
-        file_id: ID du fichier
-        file_path: Chemin du fichier CSV
-        is_orange_money: Si c'est Orange Money
-        status_column: Colonne de statut (optionnel, sera détectée si absent)
-        detected_delimiter: Délimiteur du CSV
-    
-    Returns:
-        Dict avec résultats de détection
-    """
     
     print("\n" + "=" * 60)
     print("🔥 FILTERING ACTIVE LINES")
@@ -60,28 +54,23 @@ def detect_active_lines(
     try:
         con = duckdb.connect()
         delimiter = detected_delimiter or ","
+        relation = _read_csv_sql(file_path, delimiter)
         
-        # ====================================================================
         # STEP 1: Compter les lignes totales
-        # ====================================================================
-        
         total_result = con.execute(
-            f"SELECT COUNT(*) FROM read_csv_auto('{file_path}', delim='{delimiter}')"
+            f"SELECT COUNT(*) FROM {relation}"
         ).fetchall()
         
         total_rows = total_result[0][0] if total_result else 0
         print(f"✓ Total rows: {total_rows:,}")
         
-        # ====================================================================
         # STEP 2: Orange Money case
-        # ====================================================================
-        
         if is_orange_money:
             print("\n🍊 Orange Money detected")
             print("✓ Using ACCOUNT_STATUS = 'Y' for active records")
             
             active_result = con.execute(
-                f"SELECT COUNT(*) FROM read_csv_auto('{file_path}', delim='{delimiter}') WHERE ACCOUNT_STATUS = 'Y'"
+                f"SELECT COUNT(*) FROM {relation} WHERE ACCOUNT_STATUS = 'Y'"
             ).fetchall()
             
             active_rows = active_result[0][0] if active_result else 0
@@ -104,20 +93,15 @@ def detect_active_lines(
             con.close()
             return result
         
-        # ====================================================================
         # STEP 3: Détecter la colonne de statut pour non-Orange Money
-        # ====================================================================
-        
         print("\n🔍 Detecting status column...")
         
-        # Lire le header pour obtenir les colonnes
         df_header = con.execute(
-            f"SELECT * FROM read_csv_auto('{file_path}', delim='{delimiter}') LIMIT 1"
+            f"SELECT * FROM {relation} LIMIT 1"
         ).fetchdf()
         
         all_columns = df_header.columns.tolist()
         
-        # Chercher la colonne de statut
         status_column_candidates = [
             "statut", "statut_in", "status", "state", "account_status",
             "customer_status", "subscription_status", "active", "is_active",
@@ -136,7 +120,6 @@ def detect_active_lines(
                 if detected_status_column:
                     break
         
-        # Si pas de colonne trouvée
         if not detected_status_column:
             print("⚠️ No status column detected - treating all records as active")
             result = {
@@ -155,23 +138,17 @@ def detect_active_lines(
             con.close()
             return result
         
-        # ====================================================================
         # STEP 4: Obtenir les valeurs uniques
-        # ====================================================================
-        
         print(f"\n📊 Analyzing status column: '{detected_status_column}'")
         
         unique_values_result = con.execute(
-            f'SELECT DISTINCT "{detected_status_column}" FROM read_csv_auto(\'{file_path}\', delim=\'{delimiter}\') ORDER BY "{detected_status_column}"'
+            f'SELECT DISTINCT "{detected_status_column}" FROM {relation} ORDER BY "{detected_status_column}"'
         ).fetchall()
         
         unique_values = [str(row[0]) for row in unique_values_result if row[0] is not None]
         print(f"✓ Unique values: {unique_values}")
         
-        # ====================================================================
-        # STEP 5: Utiliser LLM pour déterminer les valeurs actives
-        # ====================================================================
-        
+        # STEP 5: LLM pour déterminer les valeurs actives
         print(f"\n🤖 Using LLM to determine active status values...")
         
         active_values, reasoning = _detect_active_values_with_llm(
@@ -182,16 +159,13 @@ def detect_active_lines(
         print(f"✓ LLM determined active values: {active_values}")
         print(f"✓ Reasoning: {reasoning}")
         
-        # ====================================================================
         # STEP 6: Compter les lignes actives
-        # ====================================================================
-        
         if active_values:
             values_str = ", ".join([f"'{val}'" for val in active_values])
             where_clause = f'WHERE "{detected_status_column}" IN ({values_str})'
             
             active_result = con.execute(
-                f"SELECT COUNT(*) FROM read_csv_auto('{file_path}', delim='{delimiter}') {where_clause}"
+                f"SELECT COUNT(*) FROM {relation} {where_clause}"
             ).fetchall()
             
             active_rows = active_result[0][0] if active_result else 0
@@ -255,10 +229,6 @@ def _detect_active_values_with_llm(
     status_column: str,
     unique_values: list
 ) -> Tuple[list, str]:
-    """
-    Utilise LLM pour déterminer les valeurs de statut actif.
-    """
-    
     prompt = f"""You are a data analyst expert. Determine which status values represent "active" records.
 
 Status Column Name: {status_column}
@@ -276,7 +246,6 @@ If unsure, return empty active_values list."""
         response = llm.invoke(prompt)
         response_text = response.content
         
-        # Extract JSON
         json_start = response_text.find('{')
         json_end = response_text.rfind('}') + 1
         

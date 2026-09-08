@@ -79,24 +79,24 @@ ID_VALIDATION_RULES = {
         }
     },
     
-    "Seychelles": {
-        "NIC": {
-            "name": "National Identity Card",
-            "format": "Variable",
-            "pattern": r"^[A-Z0-9]{6,20}$",
-            "length": None,
-            "min_length": 6,
-            "max_length": 20,
-            "allowed_characters": "A-Z, 0-9",
-            "description": "Numéro de NIC Seychelles",
-            "examples": [],
+    "Botswana": {
+        "CNI": {
+            "name": "Carte Nationale d'Identité",
+            "format": "9 digits",
+            "pattern": r"^\d{9}$",
+            "length": 9,
+            "min_length": 9,
+            "max_length": 9,
+            "allowed_characters": "0-9",
+            "description": "Numéro de CNI Botswana - 9 chiffres",
+            "examples": ["123456789", "987654321"],
             "validation_rules": {
-                "numeric_only": False,
-                "exact_length": None,
-                "checksum": None,
+                "numeric_only": True,
+                "exact_length": 9,
+                "checksum": None,  # À implémenter si besoin
             }
         }
-    },
+    }
 }
 
 
@@ -226,3 +226,57 @@ def get_expected_id_types(country: str) -> list:
         return []
     
     return list(ID_VALIDATION_RULES[country].keys())
+
+def validate_id_number_any_type(
+    id_number: str,
+    country: str
+) -> Dict[str, Any]:
+    """
+    Valide un numéro d'ID contre TOUS les types de règles connus du pays,
+    sans présupposer le type. Utilisé quand la colonne type d'ID est absente
+    ou de mauvaise qualité — un ID est considéré valide s'il correspond à
+    au moins un format attendu pour ce pays.
+    
+    Args:
+        id_number: Numéro d'ID à valider
+        country: Pays
+    
+    Returns:
+        Dict avec :
+            valid: bool
+            matched_type: str|None — le type qui a matché, si trouvé
+            error: str|None
+    """
+    country_rules = ID_VALIDATION_RULES.get(country)
+    
+    if not country_rules:
+        return {
+            "valid": False,
+            "matched_type": None,
+            "error": f"No validation rules defined for country {country}",
+        }
+    
+    id_number_str = str(id_number).strip()
+    
+    if not id_number_str:
+        return {
+            "valid": False,
+            "matched_type": None,
+            "error": "ID number is empty",
+        }
+    
+    # Teste chaque type de règle du pays, s'arrête au premier match
+    for id_type_key in country_rules.keys():
+        result = validate_id_number(id_number_str, country, id_type_key)
+        if result["valid"]:
+            return {
+                "valid": True,
+                "matched_type": id_type_key,
+                "error": None,
+            }
+    
+    return {
+        "valid": False,
+        "matched_type": None,
+        "error": f"Does not match any known ID format for {country}",
+    }

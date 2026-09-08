@@ -96,16 +96,20 @@ class AnalysisAgentState(TypedDict, total=False):
     country: str
     
     # Données
-    data: List[Dict[str, Any]]  # Données en mémoire (DataFrame convertie)
+    data: List[Dict[str, Any]]
     file_path: Optional[str]
 
-    #Nombre de lignes actives
+    # NOUVEAU — sans ces trois champs déclarés, LangGraph les filtre du state
+    # et chaque node retombe sur les valeurs par défaut (delimiter=",", pas
+    # de filtre de statut actif), ce qui casse toute lecture DuckDB.
+    detected_delimiter: Optional[str]
+    active_status_column: Optional[str]
+    active_status_values: Optional[List[str]]
+
     active_rows_count: int
     
-    # Mapping de schéma
-    schema_mapping: Dict[str, str]  # {nom_column, prenom_column, msisdn_column, ...}
+    schema_mapping: Dict[str, str]
     
-    # Résultats d'analyse par champ
     msisdn_analysis: Dict[str, Any]
     first_name_analysis: Dict[str, Any]
     last_name_analysis: Dict[str, Any]
@@ -115,10 +119,8 @@ class AnalysisAgentState(TypedDict, total=False):
     address_analysis: Dict[str, Any]
     city_analysis: Dict[str, Any]
     
-    # Statut global
     analysis_status: str
     analysis_error: Optional[str]
-
 
 class PlotAgentState(TypedDict, total=False):
     """

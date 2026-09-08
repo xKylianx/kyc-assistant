@@ -3,52 +3,138 @@
 import { AnalysisReport } from '@/src/types/analysis';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/card';
 import { Button } from '@/src/components/ui/button';
-import { CheckCircle, AlertCircle, Download, RotateCcw } from 'lucide-react';
+import { CheckCircle, Download, RotateCcw, AlertTriangle, FileWarning, Users, ShieldAlert } from 'lucide-react';
+import { riskBadgeClasses, complianceScaleColor, qualityLabel, KYC_FIELD_ORDER } from '@/src/lib/kycFields';
+import { ComplianceGauge } from '@/src/components/analysis/ComplianceGauge';
+import { FieldDetailAccordion } from '@/src/components/analysis/FieldDetailAccordion';
+import { FieldHeatmap } from '@/src/components/analysis/FieldHeatmap';
+import { ComplianceRadar } from '@/src/components/analysis/ComplianceRadar';
+import { CountryTrendCard } from '@/src/components/analysis/CountryTrendCard';
+import { fieldLabel } from '@/src/lib/kycFields';
 
 interface ReportStepProps {
   report: AnalysisReport;
   onReset: () => void;
+  onExportPdf: () => void;
+  isExporting: boolean;
 }
 
-export function ReportStep({ report, onReset }: ReportStepProps) {
-  const { analysis, summary } = report;
+const RECOMMENDATION_STYLES: Record<string, string> = {
+  LOW: 'bg-green-50 text-green-800 border-green-200',
+  MEDIUM: 'bg-orange-50 text-orange-800 border-orange-200',
+  HIGH: 'bg-orange-50 text-orange-900 border-orange-300',
+  CRITICAL: 'bg-red-50 text-red-800 border-red-200',
+};
 
-  const getRiskColor = (level: string) => {
-    switch (level) {
-      case 'LOW':
-        return 'bg-green-100 text-green-800';
-      case 'MEDIUM':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'HIGH':
-        return 'bg-orange-100 text-orange-800';
-      case 'CRITICAL':
-        return 'bg-red-100 text-red-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
-  };
+export function ReportStep({ report, onReset, onExportPdf, isExporting }: ReportStepProps) {
+  const recommendationStyle =
+    RECOMMENDATION_STYLES[report.overallRiskLevel] || 'bg-gray-50 text-gray-800 border-gray-200';
+  const { label: qualityText, emoji: qualityEmoji } = qualityLabel(report.executiveSummary.overallDataQuality);
+  const riskScoreColor = complianceScaleColor(100 - report.overallRiskScore * 100);
 
-  const handleExportPdf = () => {
-    // À implémenter avec le backend
-    alert('Export PDF - À implémenter');
-  };
+  const radarData = KYC_FIELD_ORDER.filter(
+    (f) => report.fieldResults[f]?.status === 'completed' && typeof report.fieldResults[f].complianceRate === 'number'
+  ).map((f) => ({ field: f, rate: report.fieldResults[f].complianceRate as number }));
 
   return (
     <div className="space-y-6">
-      {/* En-tête du rapport */}
-      <Card className="border-green-500 bg-green-50">
+      {/* En-tête */}
+      <Card className="border-green-200 bg-green-50">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CheckCircle className="w-6 h-6 text-green-600" />
-            Analyse complétée avec succès
+            Analyse terminée
           </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-gray-700">
-            Votre fichier <span className="font-semibold">{analysis.fileName}</span> a été analysé avec succès.
+            <span className="font-semibold text-black">{report.fileName || report.fileId}</span>
+            {report.detectedCountry && <> · {report.detectedCountry}</>}
           </p>
         </CardContent>
       </Card>
+
+      {/* Recommandation */}
+      {report.executiveSummary.recommendation && (
+        <div className={`rounded-lg p-4 border flex items-start gap-3 ${recommendationStyle}`}>
+          <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <p className="text-sm font-semibold">{report.executiveSummary.recommendation}</p>
+        </div>
+      )}
+
+      {/* Tendance pays */}
+      {report.detectedCountry && (
+        <CountryTrendCard
+          country={report.detectedCountry}
+          currentFileId={report.fileId}
+          currentComplianceRate={report.overallComplianceRate}
+          rowsAnalyzed={report.summary.affectedRows}
+        />
+      )}
+
+      {/* Heatmap champs */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Vue d'ensemble par champ</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <FieldHeatmap fieldResults={report.fieldResults} />
+        </CardContent>
+      </Card>
+
+      {/* Synthèse visuelle : jauge + stats clés */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col md:flex-row items-center gap-8">
+            <ComplianceGauge
+              rate={report.overallComplianceRate}
+              quality={report.executiveSummary.overallDataQuality}
+            />
+
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-4 w-full">
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <ShieldAlert className="w-4 h-4 text-gray-500" />
+                  <p className="text-sm text-gray-600">Score de risque</p>
+                </div>
+                <p className="text-2xl font-bold" style={{ color: riskScoreColor }}>
+                  {report.overallRiskScore}
+                </p>
+              </div>
+
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <FileWarning className="w-4 h-4 text-gray-500" />
+                  <p className="text-sm text-gray-600">Anomalies</p>
+                </div>
+                <p className="text-2xl font-bold text-black">{report.summary.totalAnomalies}</p>
+              </div>
+
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Users className="w-4 h-4 text-gray-500" />
+                  <p className="text-sm text-gray-600">Enreg. affectés (estim.)</p>
+                </div>
+                <p className="text-2xl font-bold text-black">
+                  {report.summary.affectedRows.toLocaleString('fr-FR')}
+                </p>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Radar de conformité */}
+      {radarData.length >= 3 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Profil de conformité</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ComplianceRadar data={radarData} />
+          </CardContent>
+        </Card>
+      )}
 
       {/* Résumé exécutif */}
       <Card>
@@ -56,143 +142,75 @@ export function ReportStep({ report, onReset }: ReportStepProps) {
           <CardTitle className="text-base">Résumé exécutif</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-orange-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 mb-1">Score de risque</p>
-              <p className="text-3xl font-bold text-orange-600">{analysis.riskScore}%</p>
-              <span className={`inline-block mt-2 px-3 py-1 rounded-full text-sm font-semibold ${getRiskColor(analysis.riskLevel)}`}>
-                {analysis.riskLevel}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="border rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">Qualité globale des données</p>
+              <p className="text-lg font-bold text-black flex items-center gap-1.5">
+                {qualityEmoji} {qualityText}
+              </p>
+            </div>
+
+            <div className="border rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">Niveau de risque</p>
+              <span
+                className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${riskBadgeClasses(
+                  report.overallRiskLevel
+                )}`}
+              >
+                {report.overallRiskLevel}
               </span>
             </div>
 
-            <div className="bg-blue-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 mb-1">Score de conformité</p>
-              <p className="text-3xl font-bold text-blue-600">{summary.complianceScore}%</p>
-              <p className="text-xs text-gray-600 mt-2">Données conformes</p>
+            <div className="border rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">Champs avec problèmes</p>
+              <p className="text-lg font-bold text-black">
+                {report.executiveSummary.fieldsWithIssues}
+              </p>
             </div>
 
-            <div className="bg-purple-50 rounded-lg p-4">
-              <p className="text-sm text-gray-600 mb-1">Lignes analysées</p>
-              <p className="text-3xl font-bold text-purple-600">
-                {analysis.analyzedRows.toLocaleString()}
-              </p>
-              <p className="text-xs text-gray-600 mt-2">
-                sur {analysis.totalRows.toLocaleString()}
+            <div className="border rounded-lg p-4">
+              <p className="text-xs text-gray-500 mb-1">Problèmes critiques</p>
+              <p className="text-lg font-bold text-black">
+                {report.executiveSummary.criticalIssues}
               </p>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Statistiques des anomalies */}
+      {/* Détail par champ KYC */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Statistiques des anomalies</CardTitle>
+          <CardTitle className="text-base">Détail de l'analyse par champ</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="text-center p-4 bg-red-50 rounded-lg">
-              <p className="text-2xl font-bold text-red-600">
-                {summary.criticalAnomalies}
-              </p>
-              <p className="text-xs text-gray-600 mt-1">Critiques</p>
-            </div>
-
-            <div className="text-center p-4 bg-orange-50 rounded-lg">
-              <p className="text-2xl font-bold text-orange-600">
-                {summary.warningAnomalies}
-              </p>
-              <p className="text-xs text-gray-600 mt-1">Avertissements</p>
-            </div>
-
-            <div className="text-center p-4 bg-blue-50 rounded-lg">
-              <p className="text-2xl font-bold text-blue-600">
-                {summary.infoAnomalies}
-              </p>
-              <p className="text-xs text-gray-600 mt-1">Infos</p>
-            </div>
-
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <p className="text-2xl font-bold text-gray-600">
-                {summary.affectedRows}
-              </p>
-              <p className="text-xs text-gray-600 mt-1">Lignes affectées</p>
-            </div>
+          <div className="space-y-2">
+            {KYC_FIELD_ORDER
+              .filter((field) => report.fieldResults[field])
+              .map((field) => (
+                <FieldDetailAccordion
+                  key={field}
+                  field={field}
+                  data={report.fieldResults[field]}
+                />
+              ))}
           </div>
         </CardContent>
       </Card>
-
-      {/* Détails de l'analyse */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Détails de l'analyse</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <div className="flex justify-between items-center py-2 border-b">
-              <span className="text-gray-600">Fichier analysé</span>
-              <span className="font-semibold text-gray-900">{analysis.fileName}</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b">
-              <span className="text-gray-600">Pays détecté</span>
-              <span className="font-semibold text-gray-900">{analysis.detectedCountry}</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b">
-              <span className="text-gray-600">Schéma détecté</span>
-              <span className="font-semibold text-gray-900">
-                {analysis.detectedSchema === 'orange_money' ? 'Orange Money' : 'Autre'}
-              </span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b">
-              <span className="text-gray-600">Temps d'analyse</span>
-              <span className="font-semibold text-gray-900">{analysis.analysisTime}s</span>
-            </div>
-            <div className="flex justify-between items-center py-2">
-              <span className="text-gray-600">Date d'analyse</span>
-              <span className="font-semibold text-gray-900">
-                {new Date(analysis.createdAt).toLocaleDateString('fr-FR')}
-              </span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Recommandations */}
-      {analysis.riskScore > 50 && (
-        <Card className="border-orange-200 bg-orange-50">
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 text-orange-600" />
-              Recommandations
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2 text-sm text-gray-700">
-              <li>• Vérifier les anomalies détectées avant de traiter les données</li>
-              <li>• Corriger les formats invalides (téléphones, emails, etc.)</li>
-              <li>• Valider les montants négatifs ou aberrants</li>
-              <li>• Mettre à jour les statuts non reconnus</li>
-            </ul>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Boutons */}
       <div className="flex gap-4 justify-end">
-        <Button
-          variant="outline"
-          onClick={onReset}
-          className="flex items-center gap-2"
-        >
+        <Button variant="outline" onClick={onReset} className="flex items-center gap-2">
           <RotateCcw className="w-4 h-4" />
           Analyser un autre fichier
         </Button>
         <Button
-          onClick={handleExportPdf}
-          className="bg-orange-500 hover:bg-orange-600 text-white flex items-center gap-2"
+          onClick={onExportPdf}
+          disabled={isExporting}
+          className="bg-orange hover:bg-orange-600 text-black font-semibold flex items-center gap-2"
         >
           <Download className="w-4 h-4" />
-          Télécharger le rapport PDF
+          {isExporting ? 'Export en cours...' : 'Exporter en PDF'}
         </Button>
       </div>
     </div>

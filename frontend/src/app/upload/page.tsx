@@ -1,76 +1,67 @@
 'use client';
 
-import { useState } from 'react';
 import { Layout } from '../../components/common';
 import { useKYCAnalysis } from '../../hooks/useKYCAnalysis';
 import { UploadStep } from '../../components/upload/UploadStep';
 import { SchemaStep } from '../../components/upload/SchemaStep';
+import { CountryStep } from '../../components/upload/CountryStep';
 import { AnalysisStep } from '../../components/upload/AnalysisStep';
 import { ReportStep } from '../../components/upload/ReportStep';
+import { AnalysisLoadingCard } from '../../components/upload/AnalysisLoadingCard';
 import { Card, CardContent } from '../../components/ui/card';
+import { AlertCircle } from 'lucide-react';
+
+const STEP_LABELS: Record<string, string> = {
+  upload: 'Upload',
+  prep: 'Préparation',
+  schema: 'Schéma',
+  country: 'Pays',
+  analysis: 'Analyse',
+  report: 'Rapport',
+};
+
+const STEP_ORDER = ['upload', 'prep', 'schema', 'country', 'analysis', 'report'];
 
 export default function UploadPage() {
   const {
     currentStep,
     isLoading,
     error,
-    fileId,
-    fileInfo,
+    uploadProgress,
+    prepResult,
     schemaDetection,
+    schemaAutoValidated,
+    dismissSchemaBanner,
+    countryDetection,
     analysisResult,
+    analysisElapsedSeconds,
     report,
     uploadFile,
-    detectSchema,
+    runPrep,
     validateSchema,
-    detectCountry,
-    detectActiveLines,
-    analyzeKYC,
+    validateCountry,
     generateReport,
+    exportReportPdf,
     reset,
   } = useKYCAnalysis();
 
   const handleUpload = async (file: File) => {
     try {
-      const info = await uploadFile(file);
-      // Après l'upload, détecter le schéma automatiquement
-      await detectSchema(info.fileId);
+      const upload = await uploadFile(file);
+      await runPrep(upload);
     } catch (err) {
       console.error('Erreur upload:', err);
     }
   };
 
-  const handleSchemaConfirm = async (selectedColumns: Record<string, string>) => {
-    try {
-      // 1. Valider le schéma
-      await validateSchema(selectedColumns);
-      
-      // 2. Détecter le pays
-      await detectCountry();
-      
-      // 3. Détecter les lignes actives
-      await detectActiveLines();
-      
-      // 4. Lancer l'analyse KYC
-      await analyzeKYC(selectedColumns);
-    } catch (err) {
-      console.error('Erreur analyse:', err);
-    }
-  };
-
-  const handleAnalysisComplete = async () => {
-    try {
-      await generateReport();
-    } catch (err) {
-      console.error('Erreur rapport:', err);
-    }
-  };
+  const currentIndex = STEP_ORDER.indexOf(currentStep);
+  const isAnalyzing = currentStep === 'country' && isLoading && !!countryDetection;
 
   return (
     <Layout>
       <div className="max-w-4xl mx-auto">
-        {/* En-tête */}
         <div className="mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">
+          <h1 className="text-4xl font-bold text-black mb-2">
             Analyse KYC de données
           </h1>
           <p className="text-lg text-gray-600">
@@ -78,54 +69,82 @@ export default function UploadPage() {
           </p>
         </div>
 
-        {/* Indicateur de progression */}
         <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div className={`flex-1 h-2 rounded-full ${currentStep === 'upload' ? 'bg-orange-500' : 'bg-green-500'}`} />
-            <div className={`flex-1 h-2 rounded-full mx-2 ${['schema', 'analysis', 'report'].includes(currentStep) ? 'bg-orange-500' : 'bg-gray-300'}`} />
-            <div className={`flex-1 h-2 rounded-full mx-2 ${['analysis', 'report'].includes(currentStep) ? 'bg-orange-500' : 'bg-gray-300'}`} />
-            <div className={`flex-1 h-2 rounded-full ${currentStep === 'report' ? 'bg-orange-500' : 'bg-gray-300'}`} />
+          <div className="flex items-center mb-4">
+            {STEP_ORDER.map((step, idx) => (
+              <div
+                key={step}
+                className={`flex-1 h-2 rounded-full mx-1 first:ml-0 last:mr-0 transition-colors ${
+                  idx <= currentIndex ? 'bg-orange' : 'bg-gray-200'
+                }`}
+              />
+            ))}
           </div>
-          <div className="flex justify-between text-sm text-gray-600">
-            <span>Upload</span>
-            <span>Schéma</span>
-            <span>Analyse</span>
-            <span>Rapport</span>
+          <div className="flex justify-between text-sm">
+            {STEP_ORDER.map((step, idx) => (
+              <span
+                key={step}
+                className={idx <= currentIndex ? 'text-black font-medium' : 'text-gray-400'}
+              >
+                {STEP_LABELS[step]}
+              </span>
+            ))}
           </div>
         </div>
 
-        {/* Affichage d'erreur */}
         {error && (
           <Card className="border-red-200 bg-red-50 mb-6">
             <CardContent className="pt-6">
-              <p className="text-red-700">{error}</p>
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <p className="text-red-700">{error}</p>
+              </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Étapes */}
-        {currentStep === 'upload' && (
-          <UploadStep onUpload={handleUpload} isLoading={isLoading} />
+        {(currentStep === 'upload' || currentStep === 'prep') && (
+          <UploadStep onUpload={handleUpload} isLoading={isLoading} progress={uploadProgress} />
         )}
 
         {currentStep === 'schema' && schemaDetection && (
           <SchemaStep
             schema={schemaDetection}
-            onConfirm={handleSchemaConfirm}
+            prepResult={prepResult}
+            onConfirm={validateSchema}
             isLoading={isLoading}
           />
+        )}
+
+        {currentStep === 'country' && countryDetection && (
+          isAnalyzing ? (
+            <AnalysisLoadingCard elapsedSeconds={analysisElapsedSeconds} />
+          ) : (
+            <CountryStep
+              countryDetection={countryDetection}
+              schemaAutoValidated={schemaAutoValidated}
+              onDismissBanner={dismissSchemaBanner}
+              onConfirm={validateCountry}
+              isLoading={isLoading}
+            />
+          )
         )}
 
         {currentStep === 'analysis' && analysisResult && (
           <AnalysisStep
             result={analysisResult}
-            onComplete={handleAnalysisComplete}
+            onComplete={generateReport}
             isLoading={isLoading}
           />
         )}
 
         {currentStep === 'report' && report && (
-          <ReportStep report={report} onReset={reset} />
+          <ReportStep
+            report={report}
+            onReset={reset}
+            onExportPdf={exportReportPdf}
+            isExporting={isLoading}
+          />
         )}
       </div>
     </Layout>

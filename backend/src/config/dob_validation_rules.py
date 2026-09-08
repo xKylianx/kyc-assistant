@@ -47,22 +47,19 @@ def get_dob_validation_rules(country: str) -> Dict[str, Any]:
     
     return DOB_VALIDATION_RULES[country]
 
-
 def detect_dob_format(dob_str: str) -> str:
     """
     Détecte le format d'une date de naissance.
     Supporte plusieurs formats car les données ne sont pas toujours propres.
-    
-    Args:
-        dob_str: Chaîne de date
-    
-    Returns:
-        Format détecté (YYYY-MM-DD, DD-MM-YYYY, etc.) ou UNKNOWN
     """
-    
     import re
     
     dob_str = str(dob_str).strip()
+    
+    # ISO 8601 datetime avec heure (ex: 1997-12-25T00:00:00.000Z)
+    # Testé en premier car son pattern est un sur-ensemble de YYYY-MM-DD
+    if re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', dob_str):
+        return "ISO_DATETIME"
     
     # YYYY-MM-DD
     if re.match(r'^\d{4}-\d{2}-\d{2}$', dob_str):
@@ -80,17 +77,9 @@ def detect_dob_format(dob_str: str) -> str:
     if re.match(r'^\d{4}/\d{2}/\d{2}$', dob_str):
         return "YYYY/MM/DD"
     
-    # MM-DD-YYYY
-    if re.match(r'^\d{2}-\d{2}-\d{4}$', dob_str):
-        return "MM-DD-YYYY"
-    
     # DDMMYYYY (sans séparateur)
     if re.match(r'^\d{8}$', dob_str):
         return "DDMMYYYY"
-    
-    # YYYYMMDD (sans séparateur)
-    if re.match(r'^\d{8}$', dob_str):
-        return "YYYYMMDD"
     
     # DD.MM.YYYY (point comme séparateur)
     if re.match(r'^\d{2}\.\d{2}\.\d{4}$', dob_str):
@@ -107,21 +96,17 @@ def parse_dob(dob_str: str, detected_format: str) -> datetime:
     """
     Parse une date de naissance selon son format détecté.
     Gère les erreurs de parsing gracieusement.
-    
-    Args:
-        dob_str: Chaîne de date
-        detected_format: Format détecté
-    
-    Returns:
-        Objet datetime ou None
     """
-    
     from datetime import datetime
     
     dob_str = str(dob_str).strip()
     
     try:
-        if detected_format == "YYYY-MM-DD":
+        if detected_format == "ISO_DATETIME":
+            # Ne garder que la partie date (avant le T)
+            date_part = dob_str.split('T')[0]
+            return datetime.strptime(date_part, "%Y-%m-%d")
+        elif detected_format == "YYYY-MM-DD":
             return datetime.strptime(dob_str, "%Y-%m-%d")
         elif detected_format == "DD-MM-YYYY":
             return datetime.strptime(dob_str, "%d-%m-%Y")
@@ -129,12 +114,8 @@ def parse_dob(dob_str: str, detected_format: str) -> datetime:
             return datetime.strptime(dob_str, "%d/%m/%Y")
         elif detected_format == "YYYY/MM/DD":
             return datetime.strptime(dob_str, "%Y/%m/%d")
-        elif detected_format == "MM-DD-YYYY":
-            return datetime.strptime(dob_str, "%m-%d-%Y")
         elif detected_format == "DDMMYYYY":
             return datetime.strptime(dob_str, "%d%m%Y")
-        elif detected_format == "YYYYMMDD":
-            return datetime.strptime(dob_str, "%Y%m%d")
         elif detected_format == "DD.MM.YYYY":
             return datetime.strptime(dob_str, "%d.%m.%Y")
         elif detected_format == "YYYY.MM.DD":
@@ -143,7 +124,6 @@ def parse_dob(dob_str: str, detected_format: str) -> datetime:
             return None
     except ValueError:
         return None
-
 
 def validate_dob(dob_str: str, country: str) -> Dict[str, Any]:
     """

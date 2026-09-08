@@ -3,8 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
+from src.db.base import Base
 
 class UploadedFile(Base):
     __tablename__ = "uploaded_files"
